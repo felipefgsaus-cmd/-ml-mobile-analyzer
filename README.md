@@ -1,39 +1,48 @@
-# ML Mobile Analyzer V4 Free Clean
+# ML Mobile Analyzer V5 Max Free
 
-Versão gratuita e enxuta.
+Objetivo: obter o máximo possível sem serviços externos pagos.
 
-## Mantido
-- Login OAuth do Mercado Livre
-- Questions
-- seller_id
-- Perfil do vendedor
-- Reputação
-- Power seller
-- Total histórico de transações do vendedor
-- Exportação JSON
-- Exportação CSV
+## Fontes tentadas
+- `/items/{item_id}`
+- `/items/{item_id}/description`
+- `/reviews/item/{item_id}`
+- `/questions/search`
+- `/users/{seller_id}`
+- `/products/{product_id}`
 
-## Removido da interface
-- Preço
-- Título
-- Reviews
-- Descrição
-- Estoque
-- Catálogo
-- Vendas por anúncio
-- Probes/diagnósticos 401/403
-- Brave Search API
-- Qualquer integração paga
+Cada rota é tentada uma vez. Se houver 401/403, a ferramenta segue para a próxima fonte.
 
-## Observação
-`transactions.total` é histórico do vendedor, não quantidade vendida daquele anúncio.
+## Campos tentados
+- título
+- preço
+- vendas do anúncio
+- estoque
+- frete
+- fotos
+- atributos
+- descrição
+- nota
+- quantidade de avaliações
+- textos de avaliações
+- perguntas/respostas
+- vendedor
+- reputação
+- transações históricas do vendedor
+
+## Custo
+Nenhuma API externa paga é usada.
+
+## Segurança
+- não faz scraping direto do Mercado Livre
+- não usa proxies
+- não contorna CAPTCHA
+- não rotaciona IP
+- não insiste em 403
+- token OAuth fica na memória do servidor
 
 ## Variáveis do Render
-Continue usando apenas:
-
+Mantenha apenas:
 - ML_APP_ID
 - ML_CLIENT_SECRET
 - ML_REDIRECT_URI
 - FLASK_SECRET_KEY
-
-Não é necessário criar BRAVE_SEARCH_API_KEY.
