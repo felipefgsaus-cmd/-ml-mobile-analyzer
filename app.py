@@ -17,9 +17,11 @@ APP_ID = os.getenv("ML_APP_ID", "").strip()
 CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
 REDIRECT_URI = os.getenv("ML_REDIRECT_URI", "").strip()
 FLASK_SECRET = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 
 API = "https://api.mercadolibre.com"
 AUTH_URL = "https://auth.mercadolivre.com.br/authorization"
+BRAVE_API = "https://api.search.brave.com/res/v1/web/search"
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET
@@ -29,7 +31,6 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
 )
 
-# Mantém token e resultados fora do cookie do navegador.
 SERVER_SESSIONS = {}
 
 HTML = """
@@ -38,7 +39,7 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Mobile Analyzer V3</title>
+<title>ML Mobile Analyzer V4 Safe</title>
 <style>
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f6f6;color:#202020;margin:0}
 .wrap{max-width:1180px;margin:auto;padding:18px}
@@ -46,32 +47,37 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#
 h1{font-size:26px;margin:4px 0 8px} h2{font-size:19px}
 textarea{width:100%;min-height:190px;padding:12px;border:1px solid #ccc;border-radius:12px;font-size:16px;box-sizing:border-box}
 button,.btn{background:#111;color:#fff;border:0;border-radius:12px;padding:13px 16px;font-size:16px;text-decoration:none;display:inline-block;cursor:pointer}
-.btn.secondary{background:#555}.muted{color:#666;font-size:14px}.ok{color:#087a39}.bad{color:#a40000}
+.btn.secondary{background:#555}.muted{color:#666;font-size:14px}.ok{color:#087a39}.warn{color:#9a5c00}.bad{color:#a40000}
 table{border-collapse:collapse;width:100%;font-size:12px;display:block;overflow-x:auto}
-th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;min-width:95px}
+th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;min-width:105px}
 .status{font-weight:700}.s200{color:#087a39}.s401,.s403{color:#a40000}.s404{color:#9a5c00}
-.small{font-size:12px}
+.small{font-size:12px}.tag{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 7px;margin:2px;font-size:11px}
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Mobile Analyzer V3</h1>
-<p class="muted">Coleta por múltiplas rotas oficiais, sem insistir em endpoints bloqueados.</p>
+<h1>ML Mobile Analyzer V4 Safe</h1>
+<p class="muted">API oficial do Mercado Livre + busca web oficial via Brave Search API. Sem scraping direto do Mercado Livre.</p>
 
 <div class="card">
-<h2>1. Conectar conta</h2>
+<h2>1. Conexões</h2>
 {% if not configured %}
-<p class="bad">Variáveis OAuth não configuradas.</p>
+<p class="bad">OAuth do Mercado Livre não configurado.</p>
 {% elif token %}
 <p class="ok">✓ Conta Mercado Livre autorizada nesta sessão.</p>
-<a class="btn secondary" href="/logout">Desconectar</a>
+<a class="btn secondary" href="/logout">Desconectar ML</a>
 {% else %}
 <a class="btn" href="/login">Conectar Mercado Livre</a>
+{% endif %}
+{% if brave %}
+<p class="ok">✓ Brave Search API configurada.</p>
+{% else %}
+<p class="warn">⚠ Brave Search API ainda não configurada. A análise funcionará só com a API oficial do ML.</p>
 {% endif %}
 </div>
 
 <div class="card">
-<h2>2. Cole links completos</h2>
-<p class="muted">Use os links completos. A V3 extrai item_id e product/catalog ID quando existirem.</p>
+<h2>2. Cole os links completos</h2>
+<p class="muted">A V4 usa os links/IDs como termos de busca no índice público da web e mantém os resultados externos separados dos dados confirmados pela API.</p>
 <form method="post" action="/analyze">
 <textarea name="links" placeholder="1 link por linha">{{ links or "" }}</textarea>
 <p><button type="submit">Analisar concorrentes</button></p>
@@ -84,55 +90,38 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 
 {% if rows %}
 <div class="card">
-<h2>3. Resumo recuperado</h2>
+<h2>3. Resultado</h2>
 <p><a class="btn" href="/export/json">Baixar JSON completo</a>
 <a class="btn secondary" href="/export/csv">Baixar CSV resumo</a></p>
-
 <table>
 <thead><tr>
-<th>Item</th><th>Produto</th><th>Perguntas</th><th>Seller ID</th><th>Vendedor</th>
-<th>Reputação</th><th>Catálogo</th><th>Ofertas catálogo</th><th>Busca vendedor</th>
-<th>Título</th><th>Preço</th>
+<th>Item</th><th>Seller</th><th>Reputação</th><th>Perguntas</th>
+<th>Busca web</th><th>Título provável</th><th>Preço provável</th><th>Fontes externas</th>
 </tr></thead>
 <tbody>
 {% for r in rows %}
 <tr>
 <td>{{ r.item_id or "—" }}</td>
-<td>{{ (r.product_ids or [])|join(", ") or "—" }}</td>
-<td>
-{% set qp = r.probes.get("questions_auth") %}
-{% if qp %}<span class="status s{{ qp.status }}">{{ qp.status }}</span>
-{% if r.question_summary %}<br>{{ r.question_summary.total }} encontradas{% endif %}
-{% else %}—{% endif %}
-</td>
-<td>{{ r.seller_id or "—" }}</td>
 <td>{{ r.seller.nickname if r.seller else "—" }}</td>
 <td>
 {% if r.seller and r.seller.seller_reputation %}
-{{ r.seller.seller_reputation.level_id or "—" }}<br>
-{{ r.seller.seller_reputation.power_seller_status or "" }}
+{{ r.seller.seller_reputation.level_id or "—" }}
 {% else %}—{% endif %}
 </td>
+<td>{{ r.question_summary.total if r.question_summary else 0 }}</td>
 <td>
-{% set cp = r.probes.get("catalog_best") %}
-{% if cp %}<span class="status s{{ cp.status }}">{{ cp.status }}</span>{% else %}—{% endif %}
+{% if r.web_search %}
+<span class="status s{{ r.web_search.status }}">{{ r.web_search.status }}</span>
+{% else %}—{% endif %}
 </td>
-<td>
-{% set op = r.probes.get("catalog_offers_best") %}
-{% if op %}<span class="status s{{ op.status }}">{{ op.status }}</span>{% else %}—{% endif %}
-</td>
-<td>
-{% set sp = r.probes.get("seller_items_auth") %}
-{% if sp %}<span class="status s{{ sp.status }}">{{ sp.status }}</span>{% else %}—{% endif %}
-</td>
-<td>{{ r.best.title if r.best else "—" }}</td>
-<td>{{ r.best.currency_id if r.best else "" }} {{ r.best.price if r.best and r.best.price is not none else "—" }}</td>
+<td>{{ r.external_summary.title_candidate or "—" }}</td>
+<td>{{ r.external_summary.price_candidate or "—" }}</td>
+<td>{{ r.external_summary.result_count or 0 }}</td>
 </tr>
 {% endfor %}
 </tbody>
 </table>
-
-<p class="small muted">A V3 usa apenas GET nas rotas de análise. 403 é registrado e a coleta continua por outras rotas.</p>
+<p class="small muted">“Título provável” e “Preço provável” vêm de snippets indexados e ficam marcados como não confirmados no JSON. Dados do ML API permanecem separados.</p>
 </div>
 {% endif %}
 </div></body></html>
@@ -151,353 +140,230 @@ def server_session():
 def access_token():
     return server_session().get("access_token")
 
-def headers(use_auth=True):
-    if use_auth and access_token():
-        return {"Authorization": f"Bearer {access_token()}"}
-    return {}
+def ml_headers():
+    tok = access_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
 
-def request_json(path, params=None, use_auth=True):
+def ml_get(path, params=None):
     try:
-        r = requests.get(API + path, params=params, headers=headers(use_auth), timeout=25)
+        r = requests.get(API + path, params=params, headers=ml_headers(), timeout=20)
         try:
             data = r.json()
         except Exception:
-            data = {"raw_text": r.text[:5000]}
+            data = {"raw_text": r.text[:4000]}
         return r.status_code, data
     except requests.RequestException as e:
         return 0, {"exception": type(e).__name__, "message": str(e)}
 
-def probe(path, params=None, use_auth=True):
-    status, data = request_json(path, params=params, use_auth=use_auth)
-    return {
-        "status": status,
-        "code": data.get("code") if isinstance(data, dict) else None,
-        "message": data.get("message") if isinstance(data, dict) else None,
-        "blocked_by": data.get("blocked_by") if isinstance(data, dict) else None,
-        "path": path,
-        "params": params or {},
-        "auth": use_auth,
-        "data": data,
-    }
-
 def parse_input(text):
-    records = []
+    out = []
     for raw in [x.strip() for x in text.splitlines() if x.strip()]:
         all_mlb = re.findall(r'\bMLB\d{6,}\b', raw.upper())
         all_mlbu = re.findall(r'\bMLBU\d{6,}\b', raw.upper())
-
         q_item = re.findall(r'item_id(?:%3A|:|=)+(MLB\d{6,})', raw, flags=re.I)
         q_item = [x.upper() for x in q_item]
-
         path_products = re.findall(r'/(?:p|up)/(MLB(?:U)?\d{6,})', raw, flags=re.I)
         path_products = [x.upper() for x in path_products]
-
         item_id = q_item[0] if q_item else (all_mlb[-1] if all_mlb else None)
-
         product_ids = []
         for x in all_mlbu + path_products:
             if x != item_id and x not in product_ids:
                 product_ids.append(x)
-
-        for x in all_mlb:
-            if x != item_id and x in path_products and x not in product_ids:
-                product_ids.append(x)
-
-        records.append({"raw": raw, "item_id": item_id, "product_ids": product_ids})
-    return records
-
-def summarize_item(data):
-    if not isinstance(data, dict):
-        return None
-    if not data.get("id"):
-        return None
-    return {
-        "id": data.get("id"),
-        "title": data.get("title"),
-        "price": data.get("price"),
-        "original_price": data.get("original_price"),
-        "currency_id": data.get("currency_id"),
-        "seller_id": data.get("seller_id"),
-        "category_id": data.get("category_id"),
-        "catalog_product_id": data.get("catalog_product_id"),
-        "sold_quantity": data.get("sold_quantity"),
-        "available_quantity": data.get("available_quantity"),
-        "pictures": data.get("pictures") or [],
-        "attributes": data.get("attributes") or [],
-        "shipping": data.get("shipping") or {},
-        "permalink": data.get("permalink"),
-        "source": "item"
-    }
-
-def summarize_product(data):
-    if not isinstance(data, dict):
-        return None
-    title = data.get("name") or data.get("title")
-    if not title:
-        return None
-    return {
-        "id": data.get("id"),
-        "title": title,
-        "price": None,
-        "original_price": None,
-        "currency_id": "",
-        "seller_id": None,
-        "category_id": data.get("category_id"),
-        "catalog_product_id": data.get("id"),
-        "sold_quantity": None,
-        "available_quantity": None,
-        "pictures": data.get("pictures") or [],
-        "attributes": data.get("attributes") or [],
-        "shipping": {},
-        "permalink": data.get("permalink"),
-        "source": "catalog"
-    }
-
-def extract_questions(probe_obj):
-    if not probe_obj or probe_obj.get("status") != 200:
-        return []
-    d = probe_obj.get("data")
-    if not isinstance(d, dict):
-        return []
-    return d.get("questions") or []
-
-def seller_from_questions(questions):
-    for q in questions:
-        sid = q.get("seller_id")
-        if sid:
-            return sid
-    return None
-
-def seller_summary(data):
-    if not isinstance(data, dict) or not data.get("id"):
-        return None
-    return {
-        "id": data.get("id"),
-        "nickname": data.get("nickname"),
-        "registration_date": data.get("registration_date"),
-        "seller_reputation": data.get("seller_reputation"),
-        "status": data.get("status"),
-    }
-
-def list_candidates_from_catalog_offers(data):
-    # A resposta pode variar. Varremos estruturas comuns sem assumir uma única forma.
-    candidates = []
-
-    def walk(obj):
-        if isinstance(obj, dict):
-            iid = obj.get("id") or obj.get("item_id")
-            title = obj.get("title")
-            price = obj.get("price")
-            seller_id = obj.get("seller_id")
-            permalink = obj.get("permalink")
-            if isinstance(iid, str) and iid.startswith("MLB"):
-                candidates.append({
-                    "id": iid,
-                    "title": title,
-                    "price": price,
-                    "currency_id": obj.get("currency_id"),
-                    "seller_id": seller_id,
-                    "permalink": permalink,
-                    "raw": obj,
-                })
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for x in obj:
-                walk(x)
-
-    walk(data)
-
-    seen, out = set(), []
-    for c in candidates:
-        key = c.get("id")
-        if key and key not in seen:
-            seen.add(key)
-            out.append(c)
+        out.append({"raw": raw, "item_id": item_id, "product_ids": product_ids})
     return out
 
-def item_from_seller_search(data, target_item):
-    if not isinstance(data, dict):
+def fix_mojibake(text):
+    if not isinstance(text, str):
+        return text
+    # Corrige o padrão clássico UTF-8 interpretado como latin-1, quando aplicável.
+    if "Ã" in text or "â€" in text or "Â" in text:
+        try:
+            return text.encode("latin1").decode("utf-8")
+        except Exception:
+            return text
+    return text
+
+def get_questions(item_id):
+    if not item_id:
+        return {"status": 0, "total": 0, "questions": []}
+    status, data = ml_get("/questions/search", {"item": item_id, "api_version": 4, "limit": 50})
+    questions = []
+    if status == 200 and isinstance(data, dict):
+        for q in data.get("questions") or []:
+            questions.append({
+                "id": q.get("id"),
+                "date_created": q.get("date_created"),
+                "seller_id": q.get("seller_id"),
+                "status": q.get("status"),
+                "text": fix_mojibake(q.get("text")),
+                "answer": fix_mojibake((q.get("answer") or {}).get("text")),
+            })
+    return {
+        "status": status,
+        "total": len(questions),
+        "questions": questions,
+        "raw_error": data if status != 200 else None,
+    }
+
+def get_seller(seller_id):
+    if not seller_id:
         return None
-    results = data.get("results")
-    if not isinstance(results, list):
+    status, data = ml_get(f"/users/{seller_id}")
+    if status != 200 or not isinstance(data, dict):
         return None
-    if target_item in results:
-        return {"id": target_item, "source": "seller_items_search"}
-    # Algumas respostas podem conter objetos.
-    for r in results:
-        if isinstance(r, dict) and r.get("id") == target_item:
-            x = summarize_item(r)
-            if x:
-                x["source"] = "seller_items_search"
-                return x
-    return None
+    return {
+        "id": data.get("id"),
+        "nickname": fix_mojibake(data.get("nickname")),
+        "seller_reputation": data.get("seller_reputation"),
+        "status": data.get("status"),
+        "permalink": data.get("permalink"),
+        "address": data.get("address"),
+    }
+
+def brave_search(query, count=8):
+    if not BRAVE_SEARCH_API_KEY:
+        return {"status": 0, "query": query, "results": [], "error": "BRAVE_SEARCH_API_KEY ausente"}
+    try:
+        r = requests.get(
+            BRAVE_API,
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+            },
+            params={
+                "q": query,
+                "count": max(1, min(count, 10)),
+                "country": "br",
+                "search_lang": "pt-br",
+                "safesearch": "moderate",
+            },
+            timeout=20,
+        )
+        try:
+            data = r.json()
+        except Exception:
+            data = {"raw_text": r.text[:4000]}
+    except requests.RequestException as e:
+        return {"status": 0, "query": query, "results": [], "error": str(e)}
+
+    results = []
+    if r.status_code == 200 and isinstance(data, dict):
+        for x in ((data.get("web") or {}).get("results") or []):
+            results.append({
+                "title": fix_mojibake(x.get("title")),
+                "url": x.get("url"),
+                "description": fix_mojibake(x.get("description")),
+                "profile": x.get("profile"),
+            })
+
+    return {
+        "status": r.status_code,
+        "query": query,
+        "results": results,
+        "error": data if r.status_code != 200 else None,
+    }
+
+PRICE_RE = re.compile(r'R\$\s?([\d\.]+(?:,\d{2})?)', re.I)
+
+def infer_from_results(search_results, item_id, product_ids, seller_name=None):
+    title_candidate = None
+    price_candidate = None
+    evidence = []
+
+    ids = [x for x in ([item_id] + (product_ids or [])) if x]
+
+    for r in search_results:
+        title = r.get("title") or ""
+        desc = r.get("description") or ""
+        url = r.get("url") or ""
+        hay = " ".join([title, desc, url])
+
+        matched = [x for x in ids if x and x.lower() in hay.lower()]
+        if matched:
+            evidence.append({
+                "matched_ids": matched,
+                "title": title,
+                "description": desc,
+                "url": url,
+            })
+
+            if not title_candidate and title:
+                # Evita títulos genéricos de páginas de busca/perfil quando possível.
+                if "mercado livre" not in title.lower() or len(title) > 20:
+                    title_candidate = title
+
+            if not price_candidate:
+                m = PRICE_RE.search(hay)
+                if m:
+                    price_candidate = "R$ " + m.group(1)
+
+    # Se o ID exato não apareceu no snippet, ainda preservamos resultados relevantes,
+    # mas não inferimos preço/título automaticamente.
+    return {
+        "title_candidate": title_candidate,
+        "price_candidate": price_candidate,
+        "result_count": len(search_results),
+        "matched_evidence": evidence,
+        "confidence_note": "Candidatos extraídos de snippets indexados; não equivalem a dados confirmados pela API do Mercado Livre.",
+    }
 
 def collect_record(rec):
     item_id = rec.get("item_id")
-    product_ids = list(rec.get("product_ids") or [])
-    probes = {}
-    best = None
+    product_ids = rec.get("product_ids") or []
 
-    # 1) ITEM principal: uma tentativa autenticada e uma pública.
+    questions = get_questions(item_id)
+    seller_id = None
+    for q in questions.get("questions") or []:
+        if q.get("seller_id"):
+            seller_id = q["seller_id"]
+            break
+    seller = get_seller(seller_id)
+
+    # Busca externa via API oficial do Brave. Sem crawl direto no Mercado Livre.
+    searches = []
+    queries = []
+
     if item_id:
-        probes["item_auth"] = probe(f"/items/{item_id}", {"include_attributes":"all"}, True)
-        best = summarize_item(probes["item_auth"]["data"])
+        queries.append(f'"{item_id}"')
+        queries.append(f'site:mercadolivre.com.br "{item_id}"')
 
-        probes["item_public"] = probe(f"/items/{item_id}", {"include_attributes":"all"}, False)
-        if not best:
-            best = summarize_item(probes["item_public"]["data"])
+    for pid in product_ids[:2]:
+        queries.append(f'"{pid}"')
 
-        # 2) Questions: sabemos que este endpoint pode funcionar para terceiros.
-        probes["questions_auth"] = probe(
-            "/questions/search",
-            {"item": item_id, "api_version": 4, "limit": 50},
-            True
-        )
+    if seller and seller.get("nickname") and item_id:
+        queries.append(f'"{item_id}" "{seller["nickname"]}"')
 
-    questions = extract_questions(probes.get("questions_auth"))
-    seller_id = seller_from_questions(questions)
+    # Remove duplicadas, limita chamadas por anúncio.
+    dedup = []
+    for q in queries:
+        if q not in dedup:
+            dedup.append(q)
+    queries = dedup[:4]
 
-    question_summary = {
-        "total": len(questions),
-        "seller_id": seller_id,
-        "questions": [
-            {
-                "id": q.get("id"),
-                "date_created": q.get("date_created"),
-                "text": q.get("text"),
-                "status": q.get("status"),
-                "answer": (q.get("answer") or {}).get("text"),
-            }
-            for q in questions
-        ],
-    }
+    all_results = []
+    status = 0
+    for idx, q in enumerate(queries):
+        s = brave_search(q, count=8)
+        searches.append(s)
+        if s.get("status") == 200:
+            status = 200
+            all_results.extend(s.get("results") or [])
+        elif status == 0:
+            status = s.get("status") or 0
+        # Pequena pausa para manter a coleta conservadora.
+        if idx < len(queries) - 1:
+            time.sleep(0.35)
 
-    # 3) Seller e reputação usando seller_id descoberto pelas perguntas.
-    seller = None
-    if seller_id:
-        probes["seller_auth"] = probe(f"/users/{seller_id}", use_auth=True)
-        if probes["seller_auth"]["status"] == 200:
-            seller = seller_summary(probes["seller_auth"]["data"])
-        else:
-            probes["seller_public"] = probe(f"/users/{seller_id}", use_auth=False)
-            if probes["seller_public"]["status"] == 200:
-                seller = seller_summary(probes["seller_public"]["data"])
+    # Dedup de URLs.
+    unique = []
+    seen = set()
+    for r in all_results:
+        url = r.get("url")
+        if url and url not in seen:
+            seen.add(url)
+            unique.append(r)
 
-        # 4) Lista de itens do vendedor. Pode ou não estar liberada.
-        probes["seller_items_auth"] = probe(f"/users/{seller_id}/items/search", use_auth=True)
-        if not best and probes["seller_items_auth"]["status"] == 200:
-            best = item_from_seller_search(probes["seller_items_auth"]["data"], item_id)
-
-        # 5) Busca no site filtrada por seller_id como rota alternativa.
-        probes["site_search_seller_auth"] = probe(
-            "/sites/MLB/search",
-            {"seller_id": seller_id, "limit": 50},
-            True
-        )
-
-        # Se a busca retorna resultados com o item alvo, use o objeto.
-        if not best and probes["site_search_seller_auth"]["status"] == 200:
-            d = probes["site_search_seller_auth"]["data"]
-            if isinstance(d, dict):
-                for obj in d.get("results") or []:
-                    if isinstance(obj, dict) and obj.get("id") == item_id:
-                        best = summarize_item(obj)
-                        if best:
-                            best["source"] = "site_search_seller"
-                            break
-
-    # 6) Catálogo/produto e ofertas relacionadas ao product_id dos links.
-    catalog_summaries = []
-    catalog_offer_candidates = []
-
-    for pid in product_ids:
-        ca = probe(f"/products/{pid}", use_auth=True)
-        cp = None
-        if ca["status"] == 200:
-            cp = ca
-        else:
-            cpub = probe(f"/products/{pid}", use_auth=False)
-            probes[f"catalog_{pid}_public"] = cpub
-            cp = cpub if cpub["status"] == 200 else ca
-
-        probes[f"catalog_{pid}_auth"] = ca
-
-        summary = summarize_product(cp["data"]) if cp and cp["status"] == 200 else None
-        catalog_summaries.append((pid, cp, summary))
-        if not best and summary:
-            best = summary
-
-        # Ofertas/itens vinculados ao produto de catálogo.
-        # Testamos duas formas de endpoint usadas por diferentes famílias de produto.
-        offer_probes = [
-            probe(f"/products/{pid}/items", use_auth=True),
-            probe(f"/products/{pid}/items", {"site_id":"MLB"}, True),
-        ]
-        probes[f"catalog_{pid}_items"] = offer_probes[0]
-        probes[f"catalog_{pid}_items_site"] = offer_probes[1]
-
-        for op in offer_probes:
-            if op["status"] == 200:
-                cands = list_candidates_from_catalog_offers(op["data"])
-                catalog_offer_candidates.extend(cands)
-                if not best:
-                    for c in cands:
-                        if c.get("id") == item_id:
-                            best = {
-                                "id": c.get("id"),
-                                "title": c.get("title"),
-                                "price": c.get("price"),
-                                "original_price": None,
-                                "currency_id": c.get("currency_id"),
-                                "seller_id": c.get("seller_id"),
-                                "category_id": None,
-                                "catalog_product_id": pid,
-                                "sold_quantity": None,
-                                "available_quantity": None,
-                                "pictures": [],
-                                "attributes": [],
-                                "shipping": {},
-                                "permalink": c.get("permalink"),
-                                "source": "catalog_offers",
-                            }
-                            break
-
-    # Resumos de status para UI.
-    if catalog_summaries:
-        chosen = None
-        for _, cp, _ in catalog_summaries:
-            if cp and cp["status"] == 200:
-                chosen = cp
-                break
-        if chosen is None:
-            chosen = catalog_summaries[0][1]
-        probes["catalog_best"] = {
-            "status": chosen["status"],
-            "code": chosen.get("code"),
-            "message": chosen.get("message"),
-        }
-
-    # Melhor status de ofertas.
-    offer_statuses = []
-    for k, v in probes.items():
-        if k.startswith("catalog_") and (k.endswith("_items") or k.endswith("_items_site")):
-            offer_statuses.append(v)
-    if offer_statuses:
-        chosen = next((x for x in offer_statuses if x["status"] == 200), offer_statuses[0])
-        probes["catalog_offers_best"] = {
-            "status": chosen["status"],
-            "code": chosen.get("code"),
-            "message": chosen.get("message"),
-        }
-
-    # 7) Se conseguimos descobrir um item via rotas alternativas, fazemos UMA consulta adicional
-    # apenas se for o mesmo item alvo e ainda não houver dados completos.
-    if best and best.get("id") == item_id and not best.get("title") and item_id:
-        alt = probe(f"/items/{item_id}", use_auth=True)
-        probes["item_retry_from_alternative"] = alt
-        if alt["status"] == 200:
-            best = summarize_item(alt["data"])
+    external_summary = infer_from_results(unique, item_id, product_ids, seller.get("nickname") if seller else None)
 
     return {
         "raw": rec.get("raw"),
@@ -505,10 +371,14 @@ def collect_record(rec):
         "product_ids": product_ids,
         "seller_id": seller_id,
         "seller": seller,
-        "question_summary": question_summary,
-        "catalog_offer_candidates": catalog_offer_candidates,
-        "best": best,
-        "probes": probes,
+        "question_summary": questions,
+        "web_search": {
+            "provider": "Brave Search API",
+            "status": status,
+            "queries": searches,
+            "results": unique,
+        },
+        "external_summary": external_summary,
         "_collected_at_unix": int(time.time()),
     }
 
@@ -519,6 +389,7 @@ def home():
         HTML,
         configured=configured(),
         token=bool(ss.get("access_token")),
+        brave=bool(BRAVE_SEARCH_API_KEY),
         rows=ss.get("results"),
         links=ss.get("last_links", ""),
         error=ss.pop("error", None),
@@ -526,11 +397,10 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"ok": True, "version": 3}
+    return {"ok": True, "version": 4, "mode": "safe"}
 
 @app.route("/notifications", methods=["GET", "POST"])
 def notifications():
-    # Endpoint cadastrado no Mercado Livre. A ferramenta não processa webhooks.
     return {"ok": True}, 200
 
 @app.route("/login")
@@ -553,7 +423,7 @@ def login():
 def callback():
     ss = server_session()
     if request.args.get("state") != ss.get("oauth_state"):
-        ss["error"] = "Falha de segurança OAuth: state inválido."
+        ss["error"] = "Falha OAuth: state inválido."
         return redirect("/")
 
     code = request.args.get("code")
@@ -573,22 +443,22 @@ def callback():
         r = requests.post(
             API + "/oauth/token",
             data=payload,
-            headers={"accept": "application/json", "content-type": "application/x-www-form-urlencoded"},
-            timeout=25,
+            headers={"accept":"application/json","content-type":"application/x-www-form-urlencoded"},
+            timeout=20,
         )
         try:
-            d = r.json()
+            data = r.json()
         except Exception:
-            d = {"raw_text": r.text[:5000]}
+            data = {"raw_text": r.text[:4000]}
     except requests.RequestException as e:
-        ss["error"] = f"Falha OAuth: {type(e).__name__}: {e}"
+        ss["error"] = f"Falha OAuth: {e}"
         return redirect("/")
 
-    if r.status_code != 200 or not d.get("access_token"):
-        ss["error"] = f"Falha ao obter token: HTTP {r.status_code} — {d.get('message', d)}"
+    if r.status_code != 200 or not data.get("access_token"):
+        ss["error"] = f"Falha ao obter token: HTTP {r.status_code}"
         return redirect("/")
 
-    ss["access_token"] = d["access_token"]
+    ss["access_token"] = data["access_token"]
     ss["oauth_state"] = None
     return redirect("/")
 
@@ -608,11 +478,11 @@ def analyze():
     records = parse_input(text)
 
     if not records:
-        ss["error"] = "Nenhum link ou ID reconhecido."
+        ss["error"] = "Nenhum link/ID reconhecido."
         return redirect("/")
 
-    if len(records) > 10:
-        ss["error"] = "Use no máximo 10 anúncios por análise."
+    if len(records) > 8:
+        ss["error"] = "Use no máximo 8 anúncios por análise."
         return redirect("/")
 
     try:
@@ -625,11 +495,10 @@ def analyze():
 @app.route("/export/json")
 def export_json():
     data = server_session().get("results") or []
-    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
     return Response(
-        payload,
+        json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
         mimetype="application/json",
-        headers={"Content-Disposition": "attachment; filename=ml_resultado_v3.json"},
+        headers={"Content-Disposition":"attachment; filename=ml_resultado_v4_safe.json"},
     )
 
 @app.route("/export/csv")
@@ -637,42 +506,39 @@ def export_csv():
     data = server_session().get("results") or []
     out = StringIO()
     fields = [
-        "item_id","product_ids","questions_total","seller_id","seller_nickname",
-        "seller_level","power_seller_status","catalog_status","catalog_offers_status",
-        "seller_items_status","title","price","currency_id","source"
+        "item_id","product_ids","seller_id","seller_nickname","seller_level",
+        "seller_transactions","questions_total","web_status","web_results",
+        "title_candidate","price_candidate"
     ]
     w = csv.DictWriter(out, fieldnames=fields)
     w.writeheader()
 
     for r in data:
-        p = r.get("probes") or {}
         seller = r.get("seller") or {}
         rep = seller.get("seller_reputation") or {}
-        best = r.get("best") or {}
-        def st(k):
-            return (p.get(k) or {}).get("status")
+        tx = rep.get("transactions") or {}
+        ext = r.get("external_summary") or {}
+        web = r.get("web_search") or {}
+        qs = r.get("question_summary") or {}
 
         w.writerow({
             "item_id": r.get("item_id"),
             "product_ids": ",".join(r.get("product_ids") or []),
-            "questions_total": (r.get("question_summary") or {}).get("total"),
             "seller_id": r.get("seller_id"),
             "seller_nickname": seller.get("nickname"),
             "seller_level": rep.get("level_id"),
-            "power_seller_status": rep.get("power_seller_status"),
-            "catalog_status": st("catalog_best"),
-            "catalog_offers_status": st("catalog_offers_best"),
-            "seller_items_status": st("seller_items_auth"),
-            "title": best.get("title"),
-            "price": best.get("price"),
-            "currency_id": best.get("currency_id"),
-            "source": best.get("source"),
+            "seller_transactions": tx.get("total"),
+            "questions_total": qs.get("total"),
+            "web_status": web.get("status"),
+            "web_results": len(web.get("results") or []),
+            "title_candidate": ext.get("title_candidate"),
+            "price_candidate": ext.get("price_candidate"),
         })
 
     return Response(
         out.getvalue().encode("utf-8-sig"),
         mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=ml_resumo_v3.csv"},
+        headers={"Content-Disposition":"attachment; filename=ml_resumo_v4_safe.csv"},
     )
 
 if __name__ == "__main__":
