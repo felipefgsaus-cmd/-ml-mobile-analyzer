@@ -8,7 +8,7 @@ from io import StringIO
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, request, redirect, session, render_template_string, Response
+from flask import Flask, request, redirect, session, render_template_string, Response, jsonify
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,6 +30,7 @@ app.config.update(
 )
 
 SERVER_SESSIONS = {}
+IOS_INBOX = {}
 
 HTML = """
 <!doctype html>
@@ -37,120 +38,187 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Mobile Analyzer V6 Diagnostic</title>
+<title>ML Mobile Analyzer V7 iPhone</title>
 <style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f5f5f5;color:#202020;margin:0}
-.wrap{max-width:1180px;margin:auto;padding:18px}
-.card{background:#fff;border:1px solid #dedede;border-radius:16px;padding:18px;margin:14px 0}
-h1{font-size:27px;margin:3px 0 8px}h2{font-size:19px;margin:0 0 12px}h3{font-size:16px}
-textarea{width:100%;min-height:180px;padding:12px;border:1px solid #bbb;border-radius:12px;font-size:16px;box-sizing:border-box}
-button,.btn{background:#111;color:#fff;border:0;border-radius:12px;padding:13px 16px;font-size:15px;text-decoration:none;display:inline-block;cursor:pointer;margin:3px}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
+.wrap{max-width:1120px;margin:auto;padding:16px}
+.card{background:#fff;border:1px solid #e1e1e1;border-radius:16px;padding:18px;margin:14px 0}
+h1{font-size:26px;margin:2px 0 8px}h2{font-size:19px;margin:0 0 12px}h3{font-size:16px}
+textarea,input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cfcfcf;border-radius:12px;font-size:16px}
+textarea{min-height:155px}
+button,.btn{display:inline-block;background:#111;color:white;border:0;border-radius:12px;padding:12px 15px;text-decoration:none;font-size:15px;cursor:pointer;margin:3px 3px 3px 0}
 .btn.secondary{background:#555}.btn.blue{background:#1769aa}
-.ok{color:#087a39}.bad{color:#a40000}.warn{color:#946200}.muted{color:#666;font-size:13px}
+.ok{color:#087a39}.bad{color:#a40000}.muted{color:#686868;font-size:13px}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.metric{padding:12px;border:1px solid #e3e3e3;border-radius:12px;background:#fafafa}
-.metric b{display:block;font-size:12px;color:#666;margin-bottom:5px}
-.metric span{font-size:17px;font-weight:700}
-table{border-collapse:collapse;width:100%;font-size:12px;display:block;overflow:auto}
-th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;min-width:110px;max-width:380px;word-break:break-word}
-.status200{color:#087a39;font-weight:700}.status403,.status401{color:#a40000;font-weight:700}.status0{color:#946200;font-weight:700}
-pre{white-space:pre-wrap;word-break:break-word;background:#f7f7f7;padding:10px;border-radius:10px;font-size:11px;max-height:280px;overflow:auto}
-.pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 7px;margin:2px;font-size:11px}
+.metric{border:1px solid #e4e4e4;background:#fafafa;border-radius:12px;padding:12px}
+.metric b{display:block;color:#666;font-size:12px;margin-bottom:5px}.metric span{font-weight:700;font-size:17px}
+.src{font-size:11px;color:#777;margin-top:5px}
+table{border-collapse:collapse;width:100%;display:block;overflow:auto;font-size:12px}
+th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;min-width:105px}
+.qa{border-top:1px solid #eee;padding:11px 0}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;background:#f6f6f6;padding:10px;border-radius:10px;font-size:12px}
+.imported{white-space:pre-wrap;max-height:280px;overflow:auto;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:10px}
 @media(max-width:700px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Mobile Analyzer V6 Diagnostic</h1>
-<p class="muted">Diagnóstico profundo das rotas oficiais. Não contorna 403, não usa proxy e não faz scraping do Mercado Livre.</p>
+<h1>ML Mobile Analyzer V7 iPhone</h1>
+<p class="muted">API oficial + catálogo + reviews + perguntas + complemento enviado pelo Safari/Atalhos.</p>
 
 <div class="card">
-<h2>1. OAuth / permissões</h2>
+<h2>1. Mercado Livre</h2>
 {% if not configured %}
-<p class="bad">Variáveis OAuth ausentes no Render.</p>
+<p class="bad">OAuth não configurado.</p>
 {% elif token %}
-<p class="ok">✓ Token ativo nesta sessão.</p>
+<p class="ok">✓ Conta autorizada.</p>
 <a class="btn secondary" href="/logout">Desconectar</a>
-<a class="btn blue" href="/reauthorize">Reautorizar após alterar permissões</a>
-<a class="btn" href="/diagnose-app">Diagnosticar aplicação/grants</a>
+<a class="btn blue" href="/reauthorize">Reautorizar</a>
 {% else %}
 <a class="btn" href="/login">Conectar Mercado Livre</a>
-{% endif %}
-{% if appdiag %}
-<h3>Aplicação / grants</h3>
-<pre>{{ appdiag|tojson(indent=2) }}</pre>
 {% endif %}
 </div>
 
 <div class="card">
-<h2>2. Anúncios</h2>
+<h2>2. Analisar anúncios</h2>
 <form method="post" action="/analyze">
-<textarea name="links" placeholder="Cole 1 link completo ou ID por linha">{{ links or "" }}</textarea>
-<p><button type="submit">Executar diagnóstico completo</button></p>
+<textarea name="links" placeholder="Cole um link ou ID por linha">{{ links or "" }}</textarea>
+<p><button type="submit">Analisar</button></p>
 </form>
-<p class="muted">Máximo 8 anúncios. A V6 faz uma tentativa por rota e registra o corpo do erro.</p>
+<p class="muted">Até 8 anúncios por vez.</p>
+</div>
+
+<div class="card">
+<h2>3. Complementar pelo iPhone</h2>
+<p>Use o Atalho do iPhone para mandar o <b>link</b> e o <b>texto visível</b> da página para esta caixa de entrada.</p>
+<p><a class="btn blue" href="/iphone">Configurar iPhone / Atalho</a></p>
+{% if ios_import %}
+<p class="ok">✓ Último conteúdo recebido do iPhone.</p>
+<p><b>URL:</b> {{ ios_import.url or "—" }}</p>
+<div class="imported">{{ ios_import.text or "(nenhum texto enviado)" }}</div>
+{% endif %}
 </div>
 
 {% if error %}<div class="card bad"><b>Erro:</b> {{ error }}</div>{% endif %}
 
 {% if rows %}
 <div class="card">
-<h2>3. Exportar</h2>
+<h2>Resultados</h2>
 <a class="btn" href="/export/json">JSON completo</a>
 <a class="btn secondary" href="/export/csv">CSV resumo</a>
 </div>
 
 {% for r in rows %}
 <div class="card">
-<h2>{{ r.item_id or "Item não identificado" }}</h2>
+<h2>{{ r.fields.title.value if r.fields.title else (r.item_id or "Anúncio") }}</h2>
 <div class="grid">
-<div class="metric"><b>Título</b><span>{{ r.fields.title.value if r.fields.title else "Indisponível" }}</span></div>
-<div class="metric"><b>Preço atual</b><span>{{ r.fields.price.value if r.fields.price else "Indisponível" }}</span></div>
+<div class="metric"><b>Preço</b><span>{{ r.fields.price.value if r.fields.price else "Indisponível" }}</span>{% if r.fields.price %}<div class="src">{{ r.fields.price.source }}</div>{% endif %}</div>
+<div class="metric"><b>Preço original</b><span>{{ r.fields.original_price.value if r.fields.original_price else "Indisponível" }}</span></div>
 <div class="metric"><b>Vendedor</b><span>{{ r.seller.nickname if r.seller else "Indisponível" }}</span></div>
-<div class="metric"><b>Perguntas</b><span>{{ r.question_summary.total }}</span></div>
+<div class="metric"><b>Reputação</b><span>{% if r.seller and r.seller.seller_reputation %}{{ r.seller.seller_reputation.level_id or "—" }}{% else %}—{% endif %}</span></div>
 <div class="metric"><b>Avaliação</b><span>{{ r.fields.rating_average.value if r.fields.rating_average else "Indisponível" }}</span></div>
-<div class="metric"><b>Descrição</b><span>{{ "Disponível" if r.fields.description else "Indisponível" }}</span></div>
+<div class="metric"><b>Total avaliações</b><span>{{ r.fields.reviews_total.value if r.fields.reviews_total else "Indisponível" }}</span></div>
+<div class="metric"><b>Perguntas</b><span>{{ r.question_summary.total }}</span></div>
+<div class="metric"><b>Fotos catálogo</b><span>{{ r.fields.pictures.value|length if r.fields.pictures else 0 }}</span></div>
 </div>
 
-<h3>Diagnóstico por rota</h3>
-<table>
-<thead><tr><th>Teste</th><th>HTTP</th><th>Código</th><th>Mensagem</th><th>Blocked by</th><th>Observação</th></tr></thead>
-<tbody>
-{% for name,p in r.probes.items() %}
-<tr>
-<td>{{ name }}</td>
-<td class="status{{ p.status }}">{{ p.status }}</td>
-<td>{{ p.code or "" }}</td>
-<td>{{ p.message or "" }}</td>
-<td>{{ p.blocked_by or "" }}</td>
-<td>{{ p.note or "" }}</td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
+{% if r.fields.catalog_description %}
+<h3>Descrição / resumo do catálogo</h3>
+<p>{{ r.fields.catalog_description.value }}</p>
+{% endif %}
+
+{% if r.fields.main_features %}
+<h3>Destaques do catálogo</h3>
+{% for x in r.fields.main_features.value %}<p>• {{ x.text if x.text else x }}</p>{% endfor %}
+{% endif %}
+
+{% if r.fields.shipping %}
+<h3>Logística do anúncio</h3>
+<pre class="code">{{ r.fields.shipping.value|tojson(indent=2) }}</pre>
+{% endif %}
+
+{% if r.fields.warranty %}
+<p><b>Garantia:</b> {{ r.fields.warranty.value }}</p>
+{% endif %}
 
 {% if r.fields.attributes %}
-<h3>Atributos recuperados ({{ r.fields.attributes.value|length }})</h3>
-<table><thead><tr><th>Nome</th><th>Valor</th></tr></thead><tbody>
+<h3>Ficha técnica</h3>
+<table><thead><tr><th>Atributo</th><th>Valor</th></tr></thead><tbody>
 {% for a in r.fields.attributes.value %}
 <tr><td>{{ a.name or a.id }}</td><td>{{ a.value_name or a.value or "" }}</td></tr>
 {% endfor %}
 </tbody></table>
 {% endif %}
 
-{% if r.question_summary.questions %}
-<h3>Perguntas recuperadas</h3>
-{% for q in r.question_summary.questions %}
-<p><b>{{ q.text }}</b><br>{{ q.answer or "Sem resposta" }}</p>
+{% if r.fields.reviews %}
+<h3>Avaliações em destaque</h3>
+{% for rv in r.fields.reviews.value[:5] %}
+<div class="qa"><b>{{ rv.title or ("Nota " ~ rv.rate) }}</b><br>{{ rv.content or "" }}</div>
 {% endfor %}
 {% endif %}
 
-<details>
-<summary>Ver respostas técnicas completas</summary>
-<pre>{{ r.probes|tojson(indent=2) }}</pre>
-</details>
+{% if r.question_summary.questions %}
+<h3>Perguntas e respostas</h3>
+{% for q in r.question_summary.questions %}
+<div class="qa"><b>{{ q.text }}</b><br>{{ q.answer or "Sem resposta" }}</div>
+{% endfor %}
+{% endif %}
+
+{% if r.other_offers %}
+<h3>Outras ofertas do mesmo produto</h3>
+<table><thead><tr><th>Item</th><th>Vendedor</th><th>Preço</th><th>Frete grátis</th><th>Logística</th></tr></thead><tbody>
+{% for o in r.other_offers %}
+<tr><td>{{ o.item_id }}</td><td>{{ o.seller_id }}</td><td>{{ o.currency_id }} {{ o.price }}</td><td>{{ o.shipping.free_shipping if o.shipping else "" }}</td><td>{{ o.shipping.logistic_type if o.shipping else "" }}</td></tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
 </div>
 {% endfor %}
 {% endif %}
+</div></body></html>
+"""
+
+IPHONE_HTML = """
+<!doctype html>
+<html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Configurar iPhone</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f5;margin:0;color:#202020}
+.wrap{max-width:760px;margin:auto;padding:16px}.card{background:white;border:1px solid #ddd;border-radius:16px;padding:18px;margin:14px 0}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f5f5f5;border-radius:10px;padding:10px;word-break:break-all}
+a{color:#1769aa}li{margin:10px 0}
+</style></head><body><div class="wrap">
+<div class="card">
+<h2>Atalho “Enviar ao Analyzer”</h2>
+<p>Seu endereço privado de recebimento é:</p>
+<div class="code">{{ ingest_url }}</div>
+<p><b>Não publique esse endereço.</b> Ele funciona como uma chave para a sua caixa de entrada.</p>
+</div>
+
+<div class="card">
+<h2>Como montar no app Atalhos</h2>
+<ol>
+<li>Abra <b>Atalhos</b> no iPhone e crie um novo atalho.</li>
+<li>Nas configurações do atalho, habilite <b>Mostrar na Folha de Compartilhamento</b> e aceite <b>URLs e páginas web do Safari</b>.</li>
+<li>Adicione a ação <b>Obter URLs da Entrada do Atalho</b>.</li>
+<li>Adicione uma ação para obter o texto da página. No Safari, prefira <b>Obter artigo usando o Leitor do Safari</b> quando disponível; se não estiver disponível, use o texto fornecido pela própria Folha de Compartilhamento.</li>
+<li>Adicione <b>Obter Conteúdo de URL</b> e use o endereço acima.</li>
+<li>Método: <b>POST</b>. Corpo da solicitação: <b>JSON</b>.</li>
+<li>Crie duas chaves no JSON: <b>url</b> = URL obtida no passo 3; <b>text</b> = texto/artigo obtido no passo 4.</li>
+<li>Salve com o nome <b>Enviar ao Analyzer</b>.</li>
+</ol>
+<p>Depois: Safari → anúncio → Compartilhar → <b>Enviar ao Analyzer</b>.</p>
+</div>
+
+<div class="card">
+<h2>Teste manual</h2>
+<form method="post" action="{{ ingest_path }}">
+<p><input style="width:100%;padding:10px" name="url" placeholder="URL"></p>
+<p><textarea style="width:100%;min-height:150px;padding:10px" name="text" placeholder="Texto da página"></textarea></p>
+<button style="padding:11px 15px">Enviar teste</button>
+</form>
+</div>
+
+<p><a href="/">← Voltar ao Analyzer</a></p>
 </div></body></html>
 """
 
@@ -167,443 +235,243 @@ def ss():
 def token():
     return ss().get("access_token")
 
-def headers(auth=True, extra=None):
-    h = {"Accept": "application/json", "User-Agent": "ML-Mobile-Analyzer/6.0"}
+def api_headers(auth=True):
+    h = {"Accept":"application/json","User-Agent":"ML-Mobile-Analyzer/7.0"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
-    if extra:
-        h.update(extra)
     return h
 
-def safe_json(resp):
+def api_get(path, params=None, auth=True):
     try:
-        return resp.json()
-    except Exception:
-        return {"raw_text": resp.text[:8000]}
-
-def normalize_error(data):
-    if not isinstance(data, dict):
-        return None, None, None
-    return data.get("code"), data.get("message") or data.get("error"), data.get("blocked_by")
-
-def probe(name, path, params=None, auth=True, extra_headers=None, note=None):
-    try:
-        r = requests.get(API + path, params=params, headers=headers(auth, extra_headers), timeout=20)
-        data = safe_json(r)
-        code, message, blocked_by = normalize_error(data)
-        return {
-            "name": name,
-            "status": r.status_code,
-            "code": code,
-            "message": message,
-            "blocked_by": blocked_by,
-            "path": path,
-            "params": params or {},
-            "auth": auth,
-            "note": note,
-            "response": data,
-            "response_headers": {
-                k: v for k, v in r.headers.items()
-                if k.lower() in {"x-request-id","x-content-type-options","content-type","retry-after"}
-            }
-        }
+        r = requests.get(API + path, params=params, headers=api_headers(auth), timeout=20)
+        try: data = r.json()
+        except Exception: data = {"raw_text":r.text[:5000]}
+        return r.status_code, data
     except requests.RequestException as e:
-        return {
-            "name": name, "status": 0, "code": type(e).__name__,
-            "message": str(e), "blocked_by": None, "path": path,
-            "params": params or {}, "auth": auth, "note": note,
-            "response": None, "response_headers": {}
-        }
+        return 0, {"error":type(e).__name__,"message":str(e)}
 
 def fix_text(x):
     if not isinstance(x, str):
         return x
-    # Mercado Livre sometimes returns already-decoded unicode; only repair obvious mojibake.
-    if any(s in x for s in ("Ã", "Â", "â€", "â€™", "â€œ", "â€”")):
+    if any(s in x for s in ("Ã","Â","â€","â€™","â€œ","â€”")):
         try:
-            return x.encode("latin-1").decode("utf-8")
+            return x.encode("latin1").decode("utf-8")
         except Exception:
             return x
     return x
 
+def deep_fix(obj):
+    if isinstance(obj, str): return fix_text(obj)
+    if isinstance(obj, list): return [deep_fix(x) for x in obj]
+    if isinstance(obj, dict): return {k:deep_fix(v) for k,v in obj.items()}
+    return obj
+
 def parse_inputs(text):
-    out = []
+    out=[]
     for raw in [x.strip() for x in text.splitlines() if x.strip()]:
-        item_q = re.findall(r'item_id(?:%3A|:|=)+(MLB\d{6,})', raw, flags=re.I)
+        q = re.findall(r'item_id(?:%3A|:|=)+(MLB\d{6,})', raw, flags=re.I)
         mlb = re.findall(r'\bMLB\d{6,}\b', raw.upper())
         mlbu = re.findall(r'\bMLBU\d{6,}\b', raw.upper())
-        paths = [x.upper() for x in re.findall(r'/(?:p|up)/(MLB(?:U)?\d{6,})', raw, flags=re.I)]
-        item_id = item_q[0].upper() if item_q else (mlb[-1] if mlb else None)
-        product_ids = []
-        for x in mlbu + paths:
-            if x != item_id and x not in product_ids:
-                product_ids.append(x)
-        out.append({"raw": raw, "item_id": item_id, "product_ids": product_ids})
+        pathp = [x.upper() for x in re.findall(r'/(?:p|up)/(MLB(?:U)?\d{6,})', raw, flags=re.I)]
+        item_id = q[0].upper() if q else (mlb[-1] if mlb else None)
+        pids=[]
+        for x in mlbu+pathp:
+            if x != item_id and x not in pids: pids.append(x)
+        out.append({"raw":raw,"item_id":item_id,"product_ids":pids})
     return out
 
-def set_field(fields, key, value, source, confidence="alta"):
-    if value in (None, "", [], {}):
-        return
-    if key not in fields:
-        fields[key] = {"value": value, "source": source, "confidence": confidence}
+def setf(fields,k,v,source,confidence="alta"):
+    if v in (None,"",[],{}): return
+    if k not in fields: fields[k]={"value":deep_fix(v),"source":source,"confidence":confidence}
 
-def item_to_fields(data, fields, source):
-    if not isinstance(data, dict):
-        return
-    set_field(fields, "title", fix_text(data.get("title")), source)
-    if data.get("price") is not None:
-        set_field(fields, "price", f"{data.get('currency_id','')} {data.get('price')}".strip(), source)
-    set_field(fields, "original_price", data.get("original_price"), source)
-    set_field(fields, "sold_quantity", data.get("sold_quantity"), source)
-    set_field(fields, "available_quantity", data.get("available_quantity"), source)
-    set_field(fields, "attributes", data.get("attributes"), source)
-    set_field(fields, "pictures", data.get("pictures"), source)
-    set_field(fields, "shipping", data.get("shipping"), source)
-
-def product_to_fields(data, fields, source):
-    if not isinstance(data, dict):
-        return
-    set_field(fields, "title", fix_text(data.get("name") or data.get("title")), source)
-    set_field(fields, "attributes", data.get("attributes"), source)
-    set_field(fields, "pictures", data.get("pictures"), source)
-
-def apply_prices(data, fields, source):
-    if not isinstance(data, dict):
-        return
-    prices = data.get("prices") or []
-    if prices:
-        # Prefer promotion if active result contains one; otherwise standard.
-        chosen = next((p for p in prices if p.get("type") == "promotion"), None)
-        chosen = chosen or next((p for p in prices if p.get("type") == "standard"), None) or prices[0]
-        if chosen.get("amount") is not None:
-            set_field(fields, "price", f"{chosen.get('currency_id','')} {chosen.get('amount')}".strip(), source)
-        set_field(fields, "regular_price", chosen.get("regular_amount"), source)
-        set_field(fields, "all_prices", prices, source)
-
-def get_questions(item_id):
-    p = probe("questions_auth", "/questions/search", {"item": item_id, "api_version": 4, "limit": 50}, True)
-    qs = []
-    seller_id = None
-    if p["status"] == 200 and isinstance(p["response"], dict):
-        for q in p["response"].get("questions") or []:
-            if not seller_id and q.get("seller_id"):
-                seller_id = q.get("seller_id")
+def questions(item_id):
+    st,d=api_get("/questions/search",{"item":item_id,"api_version":4,"limit":50},True)
+    qs=[]; seller_id=None
+    if st==200 and isinstance(d,dict):
+        for q in d.get("questions") or []:
+            seller_id=seller_id or q.get("seller_id")
             qs.append({
-                "id": q.get("id"),
-                "date_created": q.get("date_created"),
-                "seller_id": q.get("seller_id"),
-                "status": q.get("status"),
-                "text": fix_text(q.get("text")),
-                "answer": fix_text((q.get("answer") or {}).get("text"))
+                "id":q.get("id"),"date_created":q.get("date_created"),"seller_id":q.get("seller_id"),
+                "status":q.get("status"),"text":fix_text(q.get("text")),
+                "answer":fix_text((q.get("answer") or {}).get("text"))
             })
-    return p, {"status": p["status"], "total": len(qs), "questions": qs}, seller_id
+    return {"status":st,"total":len(qs),"questions":qs},seller_id
 
-def get_seller(seller_id):
-    if not seller_id:
-        return None, None
-    p = probe("seller_auth", f"/users/{seller_id}", auth=True)
-    if p["status"] != 200 or not isinstance(p["response"], dict):
-        return p, None
-    d = p["response"]
-    rep = d.get("seller_reputation") or {}
-    tx = rep.get("transactions") or {}
-    seller = {
-        "id": d.get("id"),
-        "nickname": fix_text(d.get("nickname")),
-        "address": {k: fix_text(v) for k,v in (d.get("address") or {}).items()},
-        "status": d.get("status"),
-        "permalink": d.get("permalink"),
-        "seller_reputation": {
-            "level_id": rep.get("level_id"),
-            "power_seller_status": rep.get("power_seller_status"),
-            "transactions": {"period": tx.get("period"), "total": tx.get("total")}
-        }
-    }
-    return p, seller
+def seller(seller_id):
+    if not seller_id: return None
+    st,d=api_get(f"/users/{seller_id}",auth=True)
+    if st!=200 or not isinstance(d,dict): return None
+    return deep_fix(d)
 
 def collect(rec):
-    item_id = rec.get("item_id")
-    product_ids = list(rec.get("product_ids") or [])
-    fields = {}
-    probes = {}
+    item_id=rec["item_id"]; pids=list(rec.get("product_ids") or [])
+    fields={}; other_offers=[]
+    qsum,seller_id=questions(item_id)
+    sel=seller(seller_id)
 
-    if not item_id:
-        return {
-            **rec, "seller_id": None, "seller": None,
-            "question_summary": {"status":0,"total":0,"questions":[]},
-            "fields": fields, "probes": probes, "_collected_at_unix": int(time.time())
-        }
+    # Reviews now confirmed working.
+    st,d=api_get(f"/reviews/item/{item_id}",auth=True)
+    if st==200 and isinstance(d,dict):
+        setf(fields,"rating_average",d.get("rating_average"),"Mercado Livre /reviews")
+        setf(fields,"reviews_total",(d.get("paging") or {}).get("total"),"Mercado Livre /reviews")
+        setf(fields,"reviews",d.get("reviews"),"Mercado Livre /reviews")
 
-    # Item: authenticated and public, to distinguish auth policy vs route policy.
-    p = probe("item_auth", f"/items/{item_id}", {"include_attributes":"all"}, True,
-              note="Dados do anúncio individual.")
-    probes[p["name"]] = p
-    if p["status"] == 200:
-        item_to_fields(p["response"], fields, "Mercado Livre API /items")
-        cp = (p["response"] or {}).get("catalog_product_id")
-        up = (p["response"] or {}).get("user_product_id")
-        for x in (cp, up):
-            if x and x not in product_ids:
-                product_ids.append(x)
+    # Description route can be 200 but blank.
+    st,d=api_get(f"/items/{item_id}/description",auth=True)
+    if st==200 and isinstance(d,dict):
+        desc=d.get("plain_text") or d.get("text")
+        setf(fields,"description",desc,"Mercado Livre /description")
 
-    p = probe("item_public", f"/items/{item_id}", {"include_attributes":"all"}, False,
-              note="Controle: mesma rota sem Bearer.")
-    probes[p["name"]] = p
+    # Product gives title, attributes, images, short description, main features.
+    for pid in pids[:4]:
+        st,p=api_get(f"/products/{pid}",auth=True)
+        if st==200 and isinstance(p,dict):
+            setf(fields,"title",p.get("name") or p.get("title"),f"Mercado Livre /products/{pid}")
+            setf(fields,"attributes",p.get("attributes"),f"Mercado Livre /products/{pid}")
+            setf(fields,"pictures",p.get("pictures"),f"Mercado Livre /products/{pid}")
+            short=(p.get("short_description") or {}).get("content")
+            setf(fields,"catalog_description",short,f"Mercado Livre catálogo {pid}")
+            setf(fields,"main_features",p.get("main_features"),f"Mercado Livre catálogo {pid}")
 
-    # New price APIs documented by Mercado Livre in 2026.
-    p = probe("prices_auth", f"/items/{item_id}/prices", auth=True,
-              extra_headers={"show-all-prices":"true"},
-              note="Endpoint oficial de preços.")
-    probes[p["name"]] = p
-    if p["status"] == 200:
-        apply_prices(p["response"], fields, "Mercado Livre API /items/{id}/prices")
-
-    p = probe("sale_price_auth", f"/items/{item_id}/sale_price",
-              {"context":"channel_marketplace"}, True,
-              note="Preço atual de venda no marketplace.")
-    probes[p["name"]] = p
-    if p["status"] == 200 and isinstance(p["response"], dict):
-        amount = p["response"].get("amount")
-        if amount is not None:
-            set_field(fields, "price", f"{p['response'].get('currency_id','')} {amount}".strip(),
-                      "Mercado Livre API /sale_price")
-        set_field(fields, "regular_price", p["response"].get("regular_amount"),
-                  "Mercado Livre API /sale_price")
-
-    # Description
-    p = probe("description_auth", f"/items/{item_id}/description", auth=True,
-              note="Descrição do anúncio.")
-    probes[p["name"]] = p
-    if p["status"] == 200 and isinstance(p["response"], dict):
-        set_field(fields, "description",
-                  fix_text(p["response"].get("plain_text") or p["response"].get("text")),
-                  "Mercado Livre API /description")
-
-    # Reviews by item.
-    p = probe("reviews_item_auth", f"/reviews/item/{item_id}", auth=True,
-              note="Reviews diretamente pelo item.")
-    probes[p["name"]] = p
-    if p["status"] == 200 and isinstance(p["response"], dict):
-        set_field(fields, "rating_average", p["response"].get("rating_average"),
-                  "Mercado Livre API /reviews/item")
-        set_field(fields, "reviews_total", (p["response"].get("paging") or {}).get("total"),
-                  "Mercado Livre API /reviews/item")
-        set_field(fields, "reviews", p["response"].get("reviews"),
-                  "Mercado Livre API /reviews/item")
-
-    # Questions provide seller_id even when /items is blocked.
-    qp, qsummary, seller_id = get_questions(item_id)
-    probes[qp["name"]] = qp
-    sp, seller = get_seller(seller_id)
-    if sp:
-        probes[sp["name"]] = sp
-
-    # Product/catalog probes.
-    for pid in product_ids[:4]:
-        p = probe(f"product_{pid}_auth", f"/products/{pid}", auth=True,
-                  note="Ficha de catálogo/produto.")
-        probes[p["name"]] = p
-        if p["status"] == 200:
-            product_to_fields(p["response"], fields, f"Mercado Livre API /products/{pid}")
-
-        ppub = probe(f"product_{pid}_public", f"/products/{pid}", auth=False,
-                     note="Controle sem token.")
-        probes[ppub["name"]] = ppub
-
-        # Catalog-linked reviews, documented by ML for catalog items.
-        pr = probe(f"reviews_catalog_{pid}", f"/reviews/item/{item_id}",
-                   {"catalog_product_id": pid}, True,
-                   note="Reviews usando catalog_product_id.")
-        probes[pr["name"]] = pr
-        if pr["status"] == 200 and isinstance(pr["response"], dict):
-            set_field(fields, "rating_average", pr["response"].get("rating_average"),
-                      f"Mercado Livre reviews catálogo {pid}")
-            set_field(fields, "reviews_total", (pr["response"].get("paging") or {}).get("total"),
-                      f"Mercado Livre reviews catálogo {pid}")
-            set_field(fields, "reviews", pr["response"].get("reviews"),
-                      f"Mercado Livre reviews catálogo {pid}")
-
-        # Offers/items under product: useful diagnostic if allowed.
-        po = probe(f"product_{pid}_items", f"/products/{pid}/items", {"site_id":"MLB"}, True,
-                   note="Ofertas/itens ligados ao produto de catálogo.")
-        probes[po["name"]] = po
+        st,offers=api_get(f"/products/{pid}/items",{"site_id":"MLB"},True)
+        if st==200 and isinstance(offers,dict):
+            results=deep_fix(offers.get("results") or [])
+            other_offers=results
+            own=next((x for x in results if x.get("item_id")==item_id),None)
+            if own:
+                if own.get("price") is not None:
+                    setf(fields,"price",f"{own.get('currency_id','')} {own.get('price')}".strip(),
+                         f"Mercado Livre /products/{pid}/items")
+                if own.get("original_price") is not None:
+                    setf(fields,"original_price",f"{own.get('currency_id','')} {own.get('original_price')}".strip(),
+                         f"Mercado Livre /products/{pid}/items")
+                setf(fields,"shipping",own.get("shipping"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"warranty",own.get("warranty"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"listing_type_id",own.get("listing_type_id"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"user_product_id",own.get("user_product_id"),f"Mercado Livre /products/{pid}/items")
 
     return {
-        "raw": rec.get("raw"),
-        "item_id": item_id,
-        "product_ids": product_ids,
-        "seller_id": seller_id,
-        "seller": seller,
-        "question_summary": qsummary,
-        "fields": fields,
-        "probes": probes,
-        "_collected_at_unix": int(time.time())
+        "raw":rec.get("raw"),"item_id":item_id,"product_ids":pids,
+        "seller_id":seller_id,"seller":sel,"question_summary":qsum,
+        "fields":fields,"other_offers":other_offers,"_collected_at_unix":int(time.time())
     }
 
 @app.route("/")
 def home():
-    store = ss()
+    store=ss()
+    inbox_key=store.get("ios_key")
+    ios_import=IOS_INBOX.get(inbox_key) if inbox_key else None
     return render_template_string(
-        HTML,
-        configured=configured(),
-        token=bool(store.get("access_token")),
-        rows=store.get("results"),
-        links=store.get("last_links",""),
-        error=store.pop("error",None),
-        appdiag=store.get("appdiag")
+        HTML, configured=configured(), token=bool(store.get("access_token")),
+        rows=store.get("results"), links=store.get("last_links",""),
+        error=store.pop("error",None), ios_import=ios_import
     )
 
 @app.route("/health")
 def health():
-    return {"ok": True, "version": 6, "mode": "diagnostic"}
+    return {"ok":True,"version":7,"mode":"iphone"}
 
-@app.route("/notifications", methods=["GET","POST"])
+@app.route("/notifications",methods=["GET","POST"])
 def notifications():
-    return {"ok": True}, 200
+    return {"ok":True},200
 
 @app.route("/login")
 def login():
-    store = ss()
-    if not configured():
-        store["error"] = "OAuth não configurado."
-        return redirect("/")
-    state = secrets.token_urlsafe(32)
-    store["oauth_state"] = state
-    qs = urlencode({
-        "response_type":"code",
-        "client_id":APP_ID,
-        "redirect_uri":REDIRECT_URI,
-        "state":state
-    })
-    return redirect(AUTH_URL + "?" + qs)
+    store=ss()
+    state=secrets.token_urlsafe(32); store["oauth_state"]=state
+    qs=urlencode({"response_type":"code","client_id":APP_ID,"redirect_uri":REDIRECT_URI,"state":state})
+    return redirect(AUTH_URL+"?"+qs)
 
 @app.route("/reauthorize")
 def reauthorize():
-    # Remove only local token, preserving last test data.
-    store = ss()
-    store.pop("access_token", None)
-    store.pop("refresh_token", None)
+    store=ss(); store.pop("access_token",None); store.pop("refresh_token",None)
     return redirect("/login")
 
 @app.route("/callback")
 def callback():
-    store = ss()
-    if request.args.get("state") != store.get("oauth_state"):
-        store["error"] = "OAuth state inválido."
-        return redirect("/")
-    code = request.args.get("code")
-    if not code:
-        store["error"] = "Código OAuth ausente."
-        return redirect("/")
-    payload = {
-        "grant_type":"authorization_code",
-        "client_id":APP_ID,
-        "client_secret":CLIENT_SECRET,
-        "code":code,
-        "redirect_uri":REDIRECT_URI
-    }
+    store=ss()
+    if request.args.get("state")!=store.get("oauth_state"):
+        store["error"]="OAuth state inválido."; return redirect("/")
+    payload={"grant_type":"authorization_code","client_id":APP_ID,"client_secret":CLIENT_SECRET,
+             "code":request.args.get("code"),"redirect_uri":REDIRECT_URI}
     try:
-        r = requests.post(API + "/oauth/token", data=payload,
-                          headers={"Accept":"application/json",
-                                   "Content-Type":"application/x-www-form-urlencoded"},
-                          timeout=20)
-        data = safe_json(r)
-    except requests.RequestException as e:
-        store["error"] = str(e)
-        return redirect("/")
-    if r.status_code != 200 or not isinstance(data,dict) or not data.get("access_token"):
-        store["error"] = f"Falha OAuth HTTP {r.status_code}: {data}"
-        return redirect("/")
-    store["access_token"] = data["access_token"]
-    store["refresh_token"] = data.get("refresh_token")
-    store["oauth_state"] = None
+        r=requests.post(API+"/oauth/token",data=payload,
+            headers={"Accept":"application/json","Content-Type":"application/x-www-form-urlencoded"},timeout=20)
+        data=r.json()
+    except Exception as e:
+        store["error"]=str(e); return redirect("/")
+    if r.status_code!=200 or not data.get("access_token"):
+        store["error"]=f"Falha OAuth HTTP {r.status_code}: {data}"; return redirect("/")
+    store["access_token"]=data["access_token"]; store["refresh_token"]=data.get("refresh_token")
     return redirect("/")
 
 @app.route("/logout")
 def logout():
-    sid = session.get("sid")
-    if sid:
-        SERVER_SESSIONS.pop(sid, None)
+    sid=session.get("sid")
+    if sid: SERVER_SESSIONS.pop(sid,None)
     session.clear()
     return redirect("/")
 
-@app.route("/diagnose-app")
-def diagnose_app():
-    store = ss()
-    if not token():
-        store["error"] = "Conecte a conta primeiro."
-        return redirect("/")
-    diag = {}
-    for name,path in [
-        ("application", f"/applications/{APP_ID}"),
-        ("grants", f"/applications/{APP_ID}/grants"),
-        ("me", "/users/me"),
-    ]:
-        p = probe(name, path, auth=True)
-        diag[name] = p
-    store["appdiag"] = diag
+@app.route("/analyze",methods=["POST"])
+def analyze():
+    store=ss(); text=request.form.get("links",""); store["last_links"]=text
+    recs=parse_inputs(text)
+    if not recs:
+        store["error"]="Nenhum anúncio reconhecido."; return redirect("/")
+    if len(recs)>8:
+        store["error"]="Máximo de 8 anúncios."; return redirect("/")
+    store["results"]=[collect(x) for x in recs]
     return redirect("/")
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    store = ss()
-    text = request.form.get("links","")
-    store["last_links"] = text
-    recs = parse_inputs(text)
-    if not recs:
-        store["error"] = "Nenhum anúncio reconhecido."
-        return redirect("/")
-    if len(recs) > 8:
-        store["error"] = "Máximo de 8 anúncios."
-        return redirect("/")
-    store["results"] = [collect(r) for r in recs]
-    return redirect("/")
+@app.route("/iphone")
+def iphone():
+    store=ss()
+    if not store.get("ios_key"):
+        store["ios_key"]=secrets.token_urlsafe(24)
+    key=store["ios_key"]
+    ingest_path=f"/ios-share/{key}"
+    ingest_url=request.url_root.rstrip("/") + ingest_path
+    return render_template_string(IPHONE_HTML,ingest_url=ingest_url,ingest_path=ingest_path)
+
+@app.route("/ios-share/<key>",methods=["POST"])
+def ios_share(key):
+    # Accept JSON from Shortcuts or form data for manual testing.
+    if request.is_json:
+        data=request.get_json(silent=True) or {}
+    else:
+        data=request.form.to_dict()
+    url=fix_text(str(data.get("url") or data.get("URL") or ""))
+    text=fix_text(str(data.get("text") or data.get("article") or data.get("body") or ""))
+    IOS_INBOX[key]={"url":url,"text":text[:100000],"received_at":int(time.time())}
+    return jsonify({"ok":True,"received_url":bool(url),"received_text_chars":len(text)})
 
 @app.route("/export/json")
 def export_json():
-    data = ss().get("results") or []
-    return Response(
-        json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
-        mimetype="application/json",
-        headers={"Content-Disposition":"attachment; filename=ml_v6_diagnostico.json"}
-    )
+    data=ss().get("results") or []
+    return Response(json.dumps(data,ensure_ascii=False,indent=2).encode("utf-8"),
+                    mimetype="application/json",
+                    headers={"Content-Disposition":"attachment; filename=ml_v7_resultado.json"})
 
 @app.route("/export/csv")
 def export_csv():
-    data = ss().get("results") or []
-    out = StringIO()
-    cols = [
-        "item_id","seller","questions","title","price","description",
-        "rating_average","reviews_total","item_auth","prices_auth",
-        "sale_price_auth","description_auth","reviews_item_auth"
-    ]
-    w = csv.DictWriter(out, fieldnames=cols)
-    w.writeheader()
+    data=ss().get("results") or []; out=StringIO()
+    cols=["item_id","title","price","original_price","seller","seller_level","questions",
+          "rating_average","reviews_total","warranty","logistic_type","free_shipping"]
+    w=csv.DictWriter(out,fieldnames=cols); w.writeheader()
     for r in data:
-        f = r.get("fields") or {}
-        probes = r.get("probes") or {}
+        f=r.get("fields") or {}; s=r.get("seller") or {}; rep=s.get("seller_reputation") or {}
         def fv(k): return (f.get(k) or {}).get("value")
-        def ps(k): return (probes.get(k) or {}).get("status")
+        ship=fv("shipping") or {}
         w.writerow({
-            "item_id": r.get("item_id"),
-            "seller": (r.get("seller") or {}).get("nickname"),
-            "questions": (r.get("question_summary") or {}).get("total"),
-            "title": fv("title"),
-            "price": fv("price"),
-            "description": bool(fv("description")),
-            "rating_average": fv("rating_average"),
-            "reviews_total": fv("reviews_total"),
-            "item_auth": ps("item_auth"),
-            "prices_auth": ps("prices_auth"),
-            "sale_price_auth": ps("sale_price_auth"),
-            "description_auth": ps("description_auth"),
-            "reviews_item_auth": ps("reviews_item_auth"),
+            "item_id":r.get("item_id"),"title":fv("title"),"price":fv("price"),
+            "original_price":fv("original_price"),"seller":s.get("nickname"),
+            "seller_level":rep.get("level_id"),"questions":(r.get("question_summary") or {}).get("total"),
+            "rating_average":fv("rating_average"),"reviews_total":fv("reviews_total"),
+            "warranty":fv("warranty"),"logistic_type":ship.get("logistic_type"),
+            "free_shipping":ship.get("free_shipping")
         })
-    return Response(
-        out.getvalue().encode("utf-8-sig"),
-        mimetype="text/csv",
-        headers={"Content-Disposition":"attachment; filename=ml_v6_resumo.csv"}
-    )
+    return Response(out.getvalue().encode("utf-8-sig"),mimetype="text/csv",
+                    headers={"Content-Disposition":"attachment; filename=ml_v7_resumo.csv"})
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT","8000")), debug=False)
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT","8000")),debug=False)

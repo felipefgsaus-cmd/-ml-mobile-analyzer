@@ -1,49 +1,33 @@
-# ML Mobile Analyzer V6 Diagnostic
+# ML Mobile Analyzer V7 iPhone
 
-Versão de diagnóstico profundo para descobrir exatamente quais dados o Mercado Livre liberou após a mudança de permissões.
+Versão para uso diário.
 
-## Novos testes
+## Automático via API oficial
+- título do catálogo
+- preço e preço original via ofertas do catálogo
+- vendedor e reputação
+- logística
+- garantia
+- atributos
+- fotos
+- descrição curta do catálogo
+- destaques do catálogo
+- avaliações, nota e total
+- perguntas e respostas
+- outras ofertas do mesmo produto
 
-Para cada anúncio, testa:
+## Complemento pelo iPhone
+A rota `/iphone` cria uma URL privada de recebimento para um Atalho do iPhone.
 
-- `GET /items/{ITEM_ID}` com token
-- `GET /items/{ITEM_ID}` sem token
-- `GET /items/{ITEM_ID}/prices`
-- `GET /items/{ITEM_ID}/sale_price?context=channel_marketplace`
-- `GET /items/{ITEM_ID}/description`
-- `GET /reviews/item/{ITEM_ID}`
-- `GET /reviews/item/{ITEM_ID}?catalog_product_id=...`
-- `GET /questions/search`
-- `GET /users/{SELLER_ID}`
-- `GET /products/{PRODUCT_ID}`
-- `GET /products/{PRODUCT_ID}/items?site_id=MLB`
+O Atalho é disparado manualmente pela Folha de Compartilhamento do Safari e pode enviar:
+- URL do anúncio
+- texto/artigo que o próprio Safari disponibilizar
 
-Também há um botão para testar:
-
-- `GET /applications/{APP_ID}`
-- `GET /applications/{APP_ID}/grants`
-- `GET /users/me`
-
-## Reautorização
-
-Depois de mudar permissões no DevCenter, use o botão **Reautorizar após alterar permissões**. Isso força o app a descartar o token local e gerar uma nova autorização.
-
-## Segurança
-
-Esta versão:
-- não faz scraping do Mercado Livre;
-- não usa proxy;
-- não rotaciona IP;
-- não tenta burlar PolicyAgent;
-- faz apenas uma tentativa por rota por análise;
-- registra o corpo completo do erro para diagnóstico.
+O servidor não raspa automaticamente a página do Mercado Livre.
 
 ## Render
-
-Mantenha estas variáveis:
-- `ML_APP_ID`
-- `ML_CLIENT_SECRET`
-- `ML_REDIRECT_URI`
-- `FLASK_SECRET_KEY`
-
-Não coloque nenhuma chave secreta no GitHub.
+Mantenha:
+- ML_APP_ID
+- ML_CLIENT_SECRET
+- ML_REDIRECT_URI
+- FLASK_SECRET_KEY
