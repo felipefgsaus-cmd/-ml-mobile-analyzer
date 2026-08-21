@@ -6,7 +6,6 @@ import time
 import secrets
 from io import StringIO
 from urllib.parse import urlencode
-from html import unescape
 
 import requests
 from flask import Flask, request, redirect, session, render_template_string, Response, jsonify
@@ -38,7 +37,7 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Analyzer FINAL</title>
+<title>ML Analyzer V8</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
 .wrap{max-width:1120px;margin:auto;padding:16px}
@@ -47,7 +46,7 @@ h1{font-size:26px;margin:2px 0 8px}h2{font-size:19px;margin:0 0 12px}h3{font-siz
 textarea,input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #cfcfcf;border-radius:12px;font-size:16px}
 textarea{min-height:155px}
 button,.btn{display:inline-block;background:#111;color:white;border:0;border-radius:12px;padding:12px 15px;text-decoration:none;font-size:15px;cursor:pointer;margin:3px 3px 3px 0}
-.btn.secondary{background:#555}.btn.blue{background:#1769aa}
+.btn.secondary{background:#555}.btn.blue{background:#1769aa}.btn.green{background:#087a39}
 .ok{color:#087a39}.bad{color:#a40000}.muted{color:#686868;font-size:13px}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .metric{border:1px solid #e4e4e4;background:#fafafa;border-radius:12px;padding:12px}
@@ -61,7 +60,7 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Analyzer FINAL</h1>
+<h1>ML Analyzer V8</h1>
 <p class="muted">API oficial + catálogo + reviews + perguntas + ofertas relacionadas.</p>
 
 <div class="card">
@@ -93,6 +92,7 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 <h2>Resultados</h2>
 <a class="btn" href="/export/json">JSON completo</a>
 <a class="btn secondary" href="/export/csv">CSV resumo</a>
+<a class="btn green" href="/prompt">Gerar Prompt Mestre</a>
 </div>
 
 {% for r in rows %}
@@ -110,11 +110,8 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </div>
 
 {% if r.fields.catalog_description %}
-<h3>Descrição</h3>
+<h3>Descrição / resumo do catálogo</h3>
 <p>{{ r.fields.catalog_description.value }}</p>
-{% elif r.fields.description %}
-<h3>Descrição</h3>
-<p>{{ r.fields.description.value }}</p>
 {% endif %}
 
 {% if r.fields.main_features %}
@@ -168,6 +165,205 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </div></body></html>
 """
 
+PROMPT_HTML = """
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prompt Mestre - ML Analyzer V8</title>
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
+.wrap{max-width:1120px;margin:auto;padding:16px}
+.card{background:#fff;border:1px solid #e1e1e1;border-radius:16px;padding:18px;margin:14px 0}
+h1{font-size:25px;margin:2px 0 8px}
+textarea{width:100%;box-sizing:border-box;min-height:65vh;padding:12px;border:1px solid #cfcfcf;border-radius:12px;font-size:14px;line-height:1.45}
+button,.btn{display:inline-block;background:#111;color:#fff;border:0;border-radius:12px;padding:12px 15px;text-decoration:none;font-size:15px;cursor:pointer;margin:3px 3px 3px 0}
+.btn.secondary{background:#555}.ok{color:#087a39;font-weight:700}.muted{color:#686868;font-size:13px}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Prompt Mestre da Publicação Perfeita</h1>
+<p class="muted">Gerado localmente pelo ML Analyzer V8 usando os dados já coletados. Nenhuma API de IA é necessária.</p>
+<div class="card">
+<button type="button" onclick="copyPrompt()">Copiar prompt</button>
+<a class="btn secondary" href="/export/prompt.txt">Baixar .txt</a>
+<a class="btn secondary" href="/">Voltar</a>
+<span id="copied" class="ok"></span>
+<textarea id="prompt" readonly>{{ prompt }}</textarea>
+</div>
+</div>
+<script>
+async function copyPrompt(){
+  const el=document.getElementById('prompt');
+  try{ await navigator.clipboard.writeText(el.value); }
+  catch(e){ el.select(); document.execCommand('copy'); }
+  document.getElementById('copied').textContent=' ✓ Copiado';
+}
+</script>
+</body></html>
+"""
+
+def _field_value(record, key):
+    return ((record.get("fields") or {}).get(key) or {}).get("value")
+
+def _compact(value, limit=1800):
+    if value in (None, "", [], {}):
+        return "Não disponível"
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= limit else text[:limit] + "…"
+
+def build_master_prompt(results):
+    valid = [r for r in (results or []) if not r.get("error")]
+    if not valid:
+        return "Não há anúncios analisados com dados suficientes para gerar o prompt."
+
+    blocks=[]
+    for i,r in enumerate(valid,1):
+        seller_data=r.get("seller") or {}
+        reputation=seller_data.get("seller_reputation") or {}
+        questions=(r.get("question_summary") or {}).get("questions") or []
+        reviews=_field_value(r,"reviews") or []
+        offers=r.get("other_offers") or []
+        attrs=_field_value(r,"attributes") or []
+        shipping=_field_value(r,"shipping") or {}
+
+        review_lines=[]
+        for rv in reviews[:12]:
+            if not isinstance(rv,dict): continue
+            content=rv.get("content") or rv.get("title")
+            if content:
+                review_lines.append(f"- Nota {rv.get('rate','?')}: {_compact(content,500)}")
+
+        question_lines=[]
+        for q in questions[:20]:
+            if not isinstance(q,dict): continue
+            question_lines.append(f"- Pergunta: {_compact(q.get('text'),400)} | Resposta: {_compact(q.get('answer'),500)}")
+
+        attr_lines=[]
+        for a in attrs[:40]:
+            if not isinstance(a,dict): continue
+            name=a.get("name") or a.get("id")
+            val=a.get("value_name") or a.get("value")
+            if name and val not in (None,""):
+                attr_lines.append(f"- {name}: {_compact(val,300)}")
+
+        offer_lines=[]
+        for o in offers[:20]:
+            if not isinstance(o,dict): continue
+            osh=o.get("shipping") or {}
+            offer_lines.append(
+                f"- Item {o.get('item_id','?')} | preço {o.get('currency_id','')} {o.get('price','?')} | "
+                f"frete grátis={osh.get('free_shipping')} | logística={osh.get('logistic_type')}"
+            )
+
+        block=f"""
+### CONCORRENTE {i}
+ID: {r.get('item_id') or 'Não disponível'}
+Título: {_compact(_field_value(r,'title'))}
+Preço: {_compact(_field_value(r,'price'))}
+Preço original: {_compact(_field_value(r,'original_price'))}
+Avaliação média: {_compact(_field_value(r,'rating_average'))}
+Total de avaliações: {_compact(_field_value(r,'reviews_total'))}
+Vendedor: {_compact(seller_data.get('nickname'))}
+Reputação do vendedor: {_compact(reputation.get('level_id'))}
+Garantia: {_compact(_field_value(r,'warranty'))}
+Frete/logística: {_compact(shipping)}
+Descrição do anúncio: {_compact(_field_value(r,'description'),4000)}
+Descrição/resumo do catálogo: {_compact(_field_value(r,'catalog_description'),2500)}
+Destaques do catálogo: {_compact(_field_value(r,'main_features'),2500)}
+Quantidade de fotos de catálogo: {len(_field_value(r,'pictures') or [])}
+
+Ficha técnica:
+{chr(10).join(attr_lines) if attr_lines else '- Não disponível'}
+
+Avaliações coletadas:
+{chr(10).join(review_lines) if review_lines else '- Não disponível'}
+
+Perguntas e respostas coletadas:
+{chr(10).join(question_lines) if question_lines else '- Não disponível'}
+
+Outras ofertas do mesmo produto:
+{chr(10).join(offer_lines) if offer_lines else '- Não disponível'}
+"""
+        blocks.append(block.strip())
+
+    data="\n\n".join(blocks)
+    return f"""ATUE COMO UM ESPECIALISTA SÊNIOR EM MARKETPLACES, COPYWRITING, SEO PARA MERCADO LIVRE, CONVERSÃO E INTELIGÊNCIA COMPETITIVA.
+
+Sua missão é criar a PUBLICAÇÃO IDEAL para superar os concorrentes analisados abaixo. Use os dados como inteligência competitiva, não copie textos dos concorrentes e não invente especificações técnicas que não possam ser sustentadas pelos dados. Quando algo estiver ausente ou incerto, sinalize claramente o que precisa ser confirmado comigo.
+
+Foram analisados {len(valid)} anúncios.
+
+====================
+DADOS DOS CONCORRENTES
+====================
+
+{data}
+
+====================
+SUA TAREFA
+====================
+
+1. Faça primeiro uma SÍNTESE COMPETITIVA, identificando:
+- padrões de títulos e palavras-chave relevantes;
+- benefícios mais explorados;
+- benefícios pouco explorados ou oportunidades de diferenciação;
+- principais elogios encontrados nas avaliações;
+- principais reclamações, objeções e riscos encontrados nas avaliações;
+- dúvidas recorrentes encontradas nas perguntas;
+- atributos técnicos que aparecem com frequência;
+- padrões de preço, frete, logística, reputação e garantia;
+- lacunas de informação dos concorrentes que podemos aproveitar.
+
+2. Em seguida, crie a estratégia da PUBLICAÇÃO IDEAL, explicando brevemente como ela deve superar a média dos concorrentes sem fazer promessas falsas ou afirmações não comprovadas.
+
+3. Crie o TÍTULO OTIMIZADO para Mercado Livre. Priorize intenção de busca, clareza, atributos decisivos e leitura natural. Não faça keyword stuffing. Se faltar uma especificação necessária, marque-a como [CONFIRMAR].
+
+4. Crie a DESCRIÇÃO COMPLETA DO ANÚNCIO em português do Brasil, pronta para publicação, com:
+- abertura objetiva;
+- principais benefícios;
+- diferenciais;
+- especificações importantes;
+- conteúdo da embalagem, somente quando comprovado;
+- orientações de uso relevantes;
+- garantia, somente quando disponível;
+- respostas preventivas às objeções mais comuns;
+- chamada final para compra sem exageros.
+
+5. Monte a FICHA TÉCNICA IDEAL e separe em:
+- atributos confirmados pelos dados;
+- atributos importantes que ainda precisam ser confirmados comigo.
+
+6. Crie uma FAQ com as perguntas que mais ajudam a converter, usando as dúvidas reais coletadas como base. Não invente respostas técnicas.
+
+7. Crie um PLANO DE 10 IMAGENS para a publicação. Para cada imagem informe:
+- objetivo da imagem;
+- composição/cena;
+- texto curto sugerido no infográfico, quando necessário;
+- benefício que ela deve provar;
+- o que precisa ser visualmente demonstrado.
+A imagem 1 deve funcionar como capa principal de marketplace e respeitar boas práticas de fundo limpo e destaque do produto.
+
+8. Crie, separadamente, um PROMPT DE GERAÇÃO DE IMAGEM para cada uma das 10 imagens, suficientemente detalhado para ser usado em um gerador de imagens. Não altere características físicas do produto que não estejam confirmadas.
+
+9. Sugira de 5 a 10 pontos de MELHORIA EM RELAÇÃO AOS CONCORRENTES, ordenados por impacto esperado na conversão.
+
+10. Termine com uma seção chamada "INFORMAÇÕES QUE PRECISO DO VENDEDOR", contendo somente as perguntas que realmente precisamos responder para finalizar um anúncio preciso e superior.
+
+REGRAS IMPORTANTES:
+- Não copie frases dos concorrentes.
+- Não invente medidas, materiais, compatibilidades, certificações, conteúdo da embalagem, garantia ou desempenho.
+- Diferencie fato observado de recomendação.
+- Priorize conversão e clareza, mas mantenha conformidade com as regras do marketplace.
+- Use português do Brasil.
+- Entregue o resultado de forma organizada e pronta para uso.
+""".strip()
+
 def configured():
     return bool(APP_ID and CLIENT_SECRET and REDIRECT_URI)
 
@@ -182,7 +378,7 @@ def token():
     return ss().get("access_token")
 
 def api_headers(auth=True):
-    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/9.0"}
+    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.1"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
     return h
@@ -271,282 +467,65 @@ def seller(seller_id):
     if st!=200 or not isinstance(d,dict): return None
     return deep_fix(d)
 
-
-
-def _norm_mlb(v):
-    if not isinstance(v, str):
-        return None
-    v = v.upper().replace("-", "").strip()
-    return v if re.fullmatch(r"MLB\d{6,}", v) else None
-
-def _add_pid(found, v, item_id):
-    v = _norm_mlb(v)
-    if v and v != item_id and v not in found:
-        found.append(v)
-
-def public_search_item(item_id, seller_id=None):
-    """Fallback pela busca pública do ML para recuperar dados básicos e catalog_product_id."""
-    params = {"q": item_id, "limit": 50}
-    if seller_id:
-        params["seller_id"] = seller_id
-    for auth in (True, False):
-        st, data = api_get("/sites/MLB/search", params, auth)
-        if st == 200 and isinstance(data, dict):
-            for row in data.get("results") or []:
-                if isinstance(row, dict) and row.get("id") == item_id:
-                    return deep_fix(row)
-    return None
-
-def fetch_public_page(raw_url, item_id):
-    """Último fallback: abre a página pública e extrai dados estruturados do HTML."""
-    urls = []
-    if isinstance(raw_url, str) and raw_url.startswith(("http://", "https://")):
-        urls.append(raw_url)
-
-    # Formato curto padrão do item.
-    digits = item_id.replace("MLB", "")
-    urls.append(f"https://produto.mercadolivre.com.br/MLB-{digits}")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
-    }
-
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
-            if r.status_code >= 400 or not r.text:
-                continue
-            html = r.text
-            final_url = r.url or url
-            return {"url": final_url, "html": html}
-        except requests.RequestException:
-            continue
-    return None
-
-def extract_page_data(page, item_id):
-    out = {"product_ids": [], "pictures": []}
-    if not page:
-        return out
-
-    html = page.get("html") or ""
-    final_url = page.get("url") or ""
-
-    # Catálogo via URL final ou JSON embutido.
-    for s in re.findall(r'/p/(MLB\d{6,})', final_url, flags=re.I):
-        _add_pid(out["product_ids"], s, item_id)
-
-    patterns = [
-        r'"catalog_product_id"\s*:\s*"(MLB\d{6,})"',
-        r'"catalogProductId"\s*:\s*"(MLB\d{6,})"',
-        r'"product_id"\s*:\s*"(MLB\d{6,})"',
-        r'"productId"\s*:\s*"(MLB\d{6,})"',
-        r'/p/(MLB\d{6,})',
-    ]
-    for pat in patterns:
-        for s in re.findall(pat, html, flags=re.I):
-            _add_pid(out["product_ids"], s, item_id)
-
-    # Metatags / JSON-LD para título, descrição, preço e imagens.
-    def meta(prop):
-        pats = [
-            rf'<meta[^>]+(?:property|name)=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']+)["\']',
-            rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']{re.escape(prop)}["\']',
-        ]
-        for p in pats:
-            m = re.search(p, html, flags=re.I)
-            if m:
-                return unescape(m.group(1)).strip()
-        return None
-
-    out["title"] = meta("og:title") or meta("twitter:title")
-    out["description"] = meta("og:description") or meta("description")
-    out["price"] = meta("product:price:amount") or meta("og:price:amount")
-
-    for prop in ("og:image", "twitter:image"):
-        img = meta(prop)
-        if img and img not in out["pictures"]:
-            out["pictures"].append(img)
-
-    # URLs de imagens do ML encontradas no HTML.
-    for img in re.findall(r'https://http2\.mlstatic\.com/[^"\'\\\s<>]+?\.(?:jpg|jpeg|png|webp)', html, flags=re.I):
-        img = img.replace("\\u002F", "/").replace("\\/", "/")
-        if img not in out["pictures"]:
-            out["pictures"].append(img)
-        if len(out["pictures"]) >= 20:
-            break
-
-    # Alguns valores aparecem diretamente no JSON da página.
-    if not out["price"]:
-        m = re.search(r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html)
-        if m:
-            out["price"] = m.group(1)
-
-    return out
-
-def discover_catalog_product_ids(item_id, review_data=None, seller_id=None, raw_url=None):
-    found = []
-
-    # 1) Reviews: secondary_key costuma apontar ao produto de catálogo.
-    if isinstance(review_data, dict):
-        for rv in review_data.get("reviews") or []:
-            if isinstance(rv, dict):
-                _add_pid(found, rv.get("secondary_key"), item_id)
-
-    # 2) Item individual.
-    st, data = api_get(f"/items/{item_id}", auth=True)
-    if st == 200 and isinstance(data, dict):
-        _add_pid(found, data.get("catalog_product_id"), item_id)
-
-    # 3) Multi-GET.
-    st, data = api_get("/items", {"ids": item_id}, True)
-    if st == 200 and isinstance(data, list):
-        for row in data:
-            if not isinstance(row, dict):
-                continue
-            body = row.get("body") if isinstance(row.get("body"), dict) else row
-            _add_pid(found, body.get("catalog_product_id"), item_id)
-
-    # 4) Busca pública do item.
-    sr = public_search_item(item_id, seller_id)
-    if sr:
-        _add_pid(found, sr.get("catalog_product_id"), item_id)
-
-    # 5) Página pública.
-    page = fetch_public_page(raw_url, item_id)
-    pdata = extract_page_data(page, item_id)
-    for pid in pdata.get("product_ids") or []:
-        _add_pid(found, pid, item_id)
-
-    return found, sr, pdata
-
-
 def collect(rec):
-    item_id = rec["item_id"]
-    pids = list(rec.get("product_ids") or [])
-    fields = {}
-    other_offers = []
+    item_id=rec["item_id"]; pids=list(rec.get("product_ids") or [])
+    fields={}; other_offers=[]
 
     if not item_id:
         return {
-            "raw": rec.get("raw"), "item_id": None, "product_ids": pids,
-            "seller_id": None, "seller": None,
-            "question_summary": {"status": 0, "total": 0, "questions": []},
-            "fields": fields, "other_offers": [],
-            "error": "ID do anúncio não reconhecido",
-            "_collected_at_unix": int(time.time())
+            "raw":rec.get("raw"),"item_id":None,"product_ids":pids,
+            "seller_id":None,"seller":None,
+            "question_summary":{"status":0,"total":0,"questions":[]},
+            "fields":fields,"other_offers":[],
+            "error":"ID do anúncio não reconhecido",
+            "_collected_at_unix":int(time.time())
         }
 
-    # Perguntas e vendedor.
-    qsum, seller_id = questions(item_id)
-    sel = seller(seller_id)
+    qsum,seller_id=questions(item_id)
+    sel=seller(seller_id)
 
-    # Avaliações.
-    review_data = None
-    st, d = api_get(f"/reviews/item/{item_id}", auth=True)
-    if st == 200 and isinstance(d, dict):
-        review_data = d
-        setf(fields, "rating_average", d.get("rating_average"), "Mercado Livre /reviews")
-        setf(fields, "reviews_total", (d.get("paging") or {}).get("total"), "Mercado Livre /reviews")
-        setf(fields, "reviews", d.get("reviews"), "Mercado Livre /reviews")
+    st,d=api_get(f"/reviews/item/{item_id}",auth=True)
+    if st==200 and isinstance(d,dict):
+        setf(fields,"rating_average",d.get("rating_average"),"Mercado Livre /reviews")
+        setf(fields,"reviews_total",(d.get("paging") or {}).get("total"),"Mercado Livre /reviews")
+        setf(fields,"reviews",d.get("reviews"),"Mercado Livre /reviews")
 
-    # Descobre catálogo + fallback de busca/página pública.
-    discovered, search_row, page_data = discover_catalog_product_ids(
-        item_id, review_data=review_data, seller_id=seller_id, raw_url=rec.get("raw")
-    )
-    for pid in discovered:
-        if pid not in pids:
-            pids.append(pid)
+    st,d=api_get(f"/items/{item_id}/description",auth=True)
+    if st==200 and isinstance(d,dict):
+        desc=d.get("plain_text") or d.get("text")
+        setf(fields,"description",desc,"Mercado Livre /description")
 
-    # Dados básicos pela busca pública, caso o catálogo não consiga fornecê-los.
-    if search_row:
-        setf(fields, "title", search_row.get("title"), "Mercado Livre /sites/MLB/search", "média")
-        if search_row.get("price") is not None:
-            cur = search_row.get("currency_id") or "BRL"
-            setf(fields, "price", f"{cur} {search_row.get('price')}", "Mercado Livre /sites/MLB/search", "média")
-        if search_row.get("original_price") is not None:
-            cur = search_row.get("currency_id") or "BRL"
-            setf(fields, "original_price", f"{cur} {search_row.get('original_price')}", "Mercado Livre /sites/MLB/search", "média")
-        setf(fields, "shipping", search_row.get("shipping"), "Mercado Livre /sites/MLB/search", "média")
+    for pid in pids[:4]:
+        st,p=api_get(f"/products/{pid}",auth=True)
+        if st==200 and isinstance(p,dict):
+            setf(fields,"title",p.get("name") or p.get("title"),f"Mercado Livre /products/{pid}")
+            setf(fields,"attributes",p.get("attributes"),f"Mercado Livre /products/{pid}")
+            setf(fields,"pictures",p.get("pictures"),f"Mercado Livre /products/{pid}")
+            short=(p.get("short_description") or {}).get("content")
+            setf(fields,"catalog_description",short,f"Mercado Livre catálogo {pid}")
+            setf(fields,"main_features",p.get("main_features"),f"Mercado Livre catálogo {pid}")
 
-    # Página pública como fallback para título, descrição, preço e pelo menos imagens visíveis.
-    if page_data:
-        setf(fields, "title", page_data.get("title"), "Página pública Mercado Livre", "média")
-        setf(fields, "description", page_data.get("description"), "Página pública Mercado Livre", "média")
-        if page_data.get("price"):
-            val = str(page_data.get("price"))
-            if not val.upper().startswith("BRL"):
-                val = f"BRL {val}"
-            setf(fields, "price", val, "Página pública Mercado Livre", "média")
-        if page_data.get("pictures"):
-            pics = [{"id": None, "url": u} for u in page_data["pictures"]]
-            setf(fields, "pictures", pics, "Página pública Mercado Livre", "média")
-
-    # Descrição oficial do item quando disponível.
-    st, d = api_get(f"/items/{item_id}/description", auth=True)
-    if st == 200 and isinstance(d, dict):
-        desc = d.get("plain_text") or d.get("text")
-        setf(fields, "description", desc, "Mercado Livre /description")
-
-    # Catálogo: fonte preferencial para título, ficha, fotos e descrição completa.
-    for pid in pids[:6]:
-        st, p = api_get(f"/products/{pid}", auth=True)
-        if st == 200 and isinstance(p, dict):
-            # Catálogo deve prevalecer sobre fallbacks médios.
-            if p.get("name") or p.get("title"):
-                fields["title"] = {"value": deep_fix(p.get("name") or p.get("title")),
-                                   "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
-            if p.get("attributes"):
-                fields["attributes"] = {"value": deep_fix(p.get("attributes")),
-                                        "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
-            if p.get("pictures"):
-                fields["pictures"] = {"value": deep_fix(p.get("pictures")),
-                                      "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
-            short = (p.get("short_description") or {}).get("content")
-            if short:
-                fields["catalog_description"] = {"value": deep_fix(short),
-                                                 "source": f"Mercado Livre catálogo {pid}", "confidence": "alta"}
-            if p.get("main_features"):
-                fields["main_features"] = {"value": deep_fix(p.get("main_features")),
-                                           "source": f"Mercado Livre catálogo {pid}", "confidence": "alta"}
-
-        st, offers = api_get(f"/products/{pid}/items", {"site_id": "MLB"}, True)
-        if st == 200 and isinstance(offers, dict):
-            results = deep_fix(offers.get("results") or [])
-            if results:
-                other_offers = results
-            own = next((x for x in results if x.get("item_id") == item_id), None)
+        st,offers=api_get(f"/products/{pid}/items",{"site_id":"MLB"},True)
+        if st==200 and isinstance(offers,dict):
+            results=deep_fix(offers.get("results") or [])
+            other_offers=results
+            own=next((x for x in results if x.get("item_id")==item_id),None)
             if own:
                 if own.get("price") is not None:
-                    fields["price"] = {
-                        "value": f"{own.get('currency_id','')} {own.get('price')}".strip(),
-                        "source": f"Mercado Livre /products/{pid}/items", "confidence": "alta"
-                    }
+                    setf(fields,"price",f"{own.get('currency_id','')} {own.get('price')}".strip(),
+                         f"Mercado Livre /products/{pid}/items")
                 if own.get("original_price") is not None:
-                    fields["original_price"] = {
-                        "value": f"{own.get('currency_id','')} {own.get('original_price')}".strip(),
-                        "source": f"Mercado Livre /products/{pid}/items", "confidence": "alta"
-                    }
-                setf(fields, "shipping", own.get("shipping"), f"Mercado Livre /products/{pid}/items")
-                setf(fields, "warranty", own.get("warranty"), f"Mercado Livre /products/{pid}/items")
-                setf(fields, "listing_type_id", own.get("listing_type_id"), f"Mercado Livre /products/{pid}/items")
-                setf(fields, "user_product_id", own.get("user_product_id"), f"Mercado Livre /products/{pid}/items")
-
-    # Se houver descrição do item mas não descrição de catálogo, exibe também como descrição principal.
-    if fields.get("description") and not fields.get("catalog_description"):
-        fields["catalog_description"] = fields["description"]
+                    setf(fields,"original_price",f"{own.get('currency_id','')} {own.get('original_price')}".strip(),
+                         f"Mercado Livre /products/{pid}/items")
+                setf(fields,"shipping",own.get("shipping"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"warranty",own.get("warranty"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"listing_type_id",own.get("listing_type_id"),f"Mercado Livre /products/{pid}/items")
+                setf(fields,"user_product_id",own.get("user_product_id"),f"Mercado Livre /products/{pid}/items")
 
     return {
-        "raw": rec.get("raw"),
-        "item_id": item_id,
-        "product_ids": pids,
-        "seller_id": seller_id,
-        "seller": sel,
-        "question_summary": qsum,
-        "fields": fields,
-        "other_offers": other_offers,
-        "_collected_at_unix": int(time.time())
+        "raw":rec.get("raw"),"item_id":item_id,"product_ids":pids,
+        "seller_id":seller_id,"seller":sel,"question_summary":qsum,
+        "fields":fields,"other_offers":other_offers,"_collected_at_unix":int(time.time())
     }
 
 @app.route("/")
@@ -560,7 +539,7 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"ok":True,"version":"9.0-final","mode":"web"}
+    return {"ok":True,"version":"8.1","mode":"web"}
 
 @app.route("/notifications",methods=["GET","POST"])
 def notifications():
@@ -633,12 +612,30 @@ def analyze():
     store["results"]=results
     return redirect("/")
 
+@app.route("/prompt")
+def prompt_master():
+    results=ss().get("results") or []
+    if not results:
+        ss()["error"]="Analise pelo menos um anúncio antes de gerar o Prompt Mestre."
+        return redirect("/")
+    prompt=build_master_prompt(results)
+    return render_template_string(PROMPT_HTML,prompt=prompt)
+
+@app.route("/export/prompt.txt")
+def export_prompt():
+    results=ss().get("results") or []
+    if not results:
+        return Response("Nenhum resultado analisado.",status=400,mimetype="text/plain")
+    prompt=build_master_prompt(results)
+    return Response(prompt.encode("utf-8"),mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition":"attachment; filename=ml_v8_prompt_mestre.txt"})
+
 @app.route("/export/json")
 def export_json():
     data=ss().get("results") or []
     return Response(json.dumps(data,ensure_ascii=False,indent=2).encode("utf-8"),
                     mimetype="application/json",
-                    headers={"Content-Disposition":"attachment; filename=ml_analyzer_final_resultado.json"})
+                    headers={"Content-Disposition":"attachment; filename=ml_v8_resultado.json"})
 
 @app.route("/export/csv")
 def export_csv():
@@ -659,7 +656,7 @@ def export_csv():
             "free_shipping":ship.get("free_shipping")
         })
     return Response(out.getvalue().encode("utf-8-sig"),mimetype="text/csv",
-                    headers={"Content-Disposition":"attachment; filename=ml_analyzer_final_resumo.csv"})
+                    headers={"Content-Disposition":"attachment; filename=ml_v8_resumo.csv"})
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","8000")),debug=False)
