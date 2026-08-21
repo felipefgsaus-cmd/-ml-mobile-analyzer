@@ -6,6 +6,7 @@ import time
 import secrets
 from io import StringIO
 from urllib.parse import urlencode
+from html import unescape
 
 import requests
 from flask import Flask, request, redirect, session, render_template_string, Response, jsonify
@@ -37,7 +38,7 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Analyzer V8.2</title>
+<title>ML Analyzer FINAL</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
 .wrap{max-width:1120px;margin:auto;padding:16px}
@@ -60,7 +61,7 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Analyzer V8.2</h1>
+<h1>ML Analyzer FINAL</h1>
 <p class="muted">API oficial + catálogo + reviews + perguntas + ofertas relacionadas.</p>
 
 <div class="card">
@@ -109,8 +110,11 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </div>
 
 {% if r.fields.catalog_description %}
-<h3>Descrição / resumo do catálogo</h3>
+<h3>Descrição</h3>
 <p>{{ r.fields.catalog_description.value }}</p>
+{% elif r.fields.description %}
+<h3>Descrição</h3>
+<p>{{ r.fields.description.value }}</p>
 {% endif %}
 
 {% if r.fields.main_features %}
@@ -178,7 +182,7 @@ def token():
     return ss().get("access_token")
 
 def api_headers(auth=True):
-    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.2"}
+    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/9.0"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
     return h
@@ -268,105 +272,281 @@ def seller(seller_id):
     return deep_fix(d)
 
 
-def discover_catalog_product_ids(item_id, review_data=None):
-    """Descobre IDs de catálogo mesmo quando o usuário cola só MLB-123..."""
+
+def _norm_mlb(v):
+    if not isinstance(v, str):
+        return None
+    v = v.upper().replace("-", "").strip()
+    return v if re.fullmatch(r"MLB\d{6,}", v) else None
+
+def _add_pid(found, v, item_id):
+    v = _norm_mlb(v)
+    if v and v != item_id and v not in found:
+        found.append(v)
+
+def public_search_item(item_id, seller_id=None):
+    """Fallback pela busca pública do ML para recuperar dados básicos e catalog_product_id."""
+    params = {"q": item_id, "limit": 50}
+    if seller_id:
+        params["seller_id"] = seller_id
+    for auth in (True, False):
+        st, data = api_get("/sites/MLB/search", params, auth)
+        if st == 200 and isinstance(data, dict):
+            for row in data.get("results") or []:
+                if isinstance(row, dict) and row.get("id") == item_id:
+                    return deep_fix(row)
+    return None
+
+def fetch_public_page(raw_url, item_id):
+    """Último fallback: abre a página pública e extrai dados estruturados do HTML."""
+    urls = []
+    if isinstance(raw_url, str) and raw_url.startswith(("http://", "https://")):
+        urls.append(raw_url)
+
+    # Formato curto padrão do item.
+    digits = item_id.replace("MLB", "")
+    urls.append(f"https://produto.mercadolivre.com.br/MLB-{digits}")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
+    }
+
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+            if r.status_code >= 400 or not r.text:
+                continue
+            html = r.text
+            final_url = r.url or url
+            return {"url": final_url, "html": html}
+        except requests.RequestException:
+            continue
+    return None
+
+def extract_page_data(page, item_id):
+    out = {"product_ids": [], "pictures": []}
+    if not page:
+        return out
+
+    html = page.get("html") or ""
+    final_url = page.get("url") or ""
+
+    # Catálogo via URL final ou JSON embutido.
+    for s in re.findall(r'/p/(MLB\d{6,})', final_url, flags=re.I):
+        _add_pid(out["product_ids"], s, item_id)
+
+    patterns = [
+        r'"catalog_product_id"\s*:\s*"(MLB\d{6,})"',
+        r'"catalogProductId"\s*:\s*"(MLB\d{6,})"',
+        r'"product_id"\s*:\s*"(MLB\d{6,})"',
+        r'"productId"\s*:\s*"(MLB\d{6,})"',
+        r'/p/(MLB\d{6,})',
+    ]
+    for pat in patterns:
+        for s in re.findall(pat, html, flags=re.I):
+            _add_pid(out["product_ids"], s, item_id)
+
+    # Metatags / JSON-LD para título, descrição, preço e imagens.
+    def meta(prop):
+        pats = [
+            rf'<meta[^>]+(?:property|name)=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']+)["\']',
+            rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']{re.escape(prop)}["\']',
+        ]
+        for p in pats:
+            m = re.search(p, html, flags=re.I)
+            if m:
+                return unescape(m.group(1)).strip()
+        return None
+
+    out["title"] = meta("og:title") or meta("twitter:title")
+    out["description"] = meta("og:description") or meta("description")
+    out["price"] = meta("product:price:amount") or meta("og:price:amount")
+
+    for prop in ("og:image", "twitter:image"):
+        img = meta(prop)
+        if img and img not in out["pictures"]:
+            out["pictures"].append(img)
+
+    # URLs de imagens do ML encontradas no HTML.
+    for img in re.findall(r'https://http2\.mlstatic\.com/[^"\'\\\s<>]+?\.(?:jpg|jpeg|png|webp)', html, flags=re.I):
+        img = img.replace("\\u002F", "/").replace("\\/", "/")
+        if img not in out["pictures"]:
+            out["pictures"].append(img)
+        if len(out["pictures"]) >= 20:
+            break
+
+    # Alguns valores aparecem diretamente no JSON da página.
+    if not out["price"]:
+        m = re.search(r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html)
+        if m:
+            out["price"] = m.group(1)
+
+    return out
+
+def discover_catalog_product_ids(item_id, review_data=None, seller_id=None, raw_url=None):
     found = []
 
-    def add(v):
-        if not isinstance(v, str):
-            return
-        v = v.upper().replace("-", "")
-        if re.fullmatch(r"MLB\d{6,}", v) and v != item_id and v not in found:
-            found.append(v)
-
-    # 1) Reviews frequentemente trazem o produto de catálogo em secondary_key.
+    # 1) Reviews: secondary_key costuma apontar ao produto de catálogo.
     if isinstance(review_data, dict):
         for rv in review_data.get("reviews") or []:
-            add(rv.get("secondary_key"))
+            if isinstance(rv, dict):
+                _add_pid(found, rv.get("secondary_key"), item_id)
 
-    # 2) Tenta item individual (quando a permissão da conta permitir).
+    # 2) Item individual.
     st, data = api_get(f"/items/{item_id}", auth=True)
     if st == 200 and isinstance(data, dict):
-        add(data.get("catalog_product_id"))
+        _add_pid(found, data.get("catalog_product_id"), item_id)
 
-    # 3) Fallback Multi-GET; algumas contas respondem aqui mesmo quando a rota individual é limitada.
+    # 3) Multi-GET.
     st, data = api_get("/items", {"ids": item_id}, True)
     if st == 200 and isinstance(data, list):
         for row in data:
             if not isinstance(row, dict):
                 continue
             body = row.get("body") if isinstance(row.get("body"), dict) else row
-            add(body.get("catalog_product_id"))
+            _add_pid(found, body.get("catalog_product_id"), item_id)
 
-    return found
+    # 4) Busca pública do item.
+    sr = public_search_item(item_id, seller_id)
+    if sr:
+        _add_pid(found, sr.get("catalog_product_id"), item_id)
+
+    # 5) Página pública.
+    page = fetch_public_page(raw_url, item_id)
+    pdata = extract_page_data(page, item_id)
+    for pid in pdata.get("product_ids") or []:
+        _add_pid(found, pid, item_id)
+
+    return found, sr, pdata
+
 
 def collect(rec):
-    item_id=rec["item_id"]; pids=list(rec.get("product_ids") or [])
-    fields={}; other_offers=[]
+    item_id = rec["item_id"]
+    pids = list(rec.get("product_ids") or [])
+    fields = {}
+    other_offers = []
 
     if not item_id:
         return {
-            "raw":rec.get("raw"),"item_id":None,"product_ids":pids,
-            "seller_id":None,"seller":None,
-            "question_summary":{"status":0,"total":0,"questions":[]},
-            "fields":fields,"other_offers":[],
-            "error":"ID do anúncio não reconhecido",
-            "_collected_at_unix":int(time.time())
+            "raw": rec.get("raw"), "item_id": None, "product_ids": pids,
+            "seller_id": None, "seller": None,
+            "question_summary": {"status": 0, "total": 0, "questions": []},
+            "fields": fields, "other_offers": [],
+            "error": "ID do anúncio não reconhecido",
+            "_collected_at_unix": int(time.time())
         }
 
-    qsum,seller_id=questions(item_id)
-    sel=seller(seller_id)
+    # Perguntas e vendedor.
+    qsum, seller_id = questions(item_id)
+    sel = seller(seller_id)
 
-    review_data=None
-    st,d=api_get(f"/reviews/item/{item_id}",auth=True)
-    if st==200 and isinstance(d,dict):
-        review_data=d
-        setf(fields,"rating_average",d.get("rating_average"),"Mercado Livre /reviews")
-        setf(fields,"reviews_total",(d.get("paging") or {}).get("total"),"Mercado Livre /reviews")
-        setf(fields,"reviews",d.get("reviews"),"Mercado Livre /reviews")
+    # Avaliações.
+    review_data = None
+    st, d = api_get(f"/reviews/item/{item_id}", auth=True)
+    if st == 200 and isinstance(d, dict):
+        review_data = d
+        setf(fields, "rating_average", d.get("rating_average"), "Mercado Livre /reviews")
+        setf(fields, "reviews_total", (d.get("paging") or {}).get("total"), "Mercado Livre /reviews")
+        setf(fields, "reviews", d.get("reviews"), "Mercado Livre /reviews")
 
-    # Se o link só trouxe o ID do anúncio, tenta descobrir o ID do catálogo automaticamente.
-    if not pids:
-        for pid in discover_catalog_product_ids(item_id, review_data):
-            if pid not in pids:
-                pids.append(pid)
+    # Descobre catálogo + fallback de busca/página pública.
+    discovered, search_row, page_data = discover_catalog_product_ids(
+        item_id, review_data=review_data, seller_id=seller_id, raw_url=rec.get("raw")
+    )
+    for pid in discovered:
+        if pid not in pids:
+            pids.append(pid)
 
-    st,d=api_get(f"/items/{item_id}/description",auth=True)
-    if st==200 and isinstance(d,dict):
-        desc=d.get("plain_text") or d.get("text")
-        setf(fields,"description",desc,"Mercado Livre /description")
+    # Dados básicos pela busca pública, caso o catálogo não consiga fornecê-los.
+    if search_row:
+        setf(fields, "title", search_row.get("title"), "Mercado Livre /sites/MLB/search", "média")
+        if search_row.get("price") is not None:
+            cur = search_row.get("currency_id") or "BRL"
+            setf(fields, "price", f"{cur} {search_row.get('price')}", "Mercado Livre /sites/MLB/search", "média")
+        if search_row.get("original_price") is not None:
+            cur = search_row.get("currency_id") or "BRL"
+            setf(fields, "original_price", f"{cur} {search_row.get('original_price')}", "Mercado Livre /sites/MLB/search", "média")
+        setf(fields, "shipping", search_row.get("shipping"), "Mercado Livre /sites/MLB/search", "média")
 
-    for pid in pids[:4]:
-        st,p=api_get(f"/products/{pid}",auth=True)
-        if st==200 and isinstance(p,dict):
-            setf(fields,"title",p.get("name") or p.get("title"),f"Mercado Livre /products/{pid}")
-            setf(fields,"attributes",p.get("attributes"),f"Mercado Livre /products/{pid}")
-            setf(fields,"pictures",p.get("pictures"),f"Mercado Livre /products/{pid}")
-            short=(p.get("short_description") or {}).get("content")
-            setf(fields,"catalog_description",short,f"Mercado Livre catálogo {pid}")
-            setf(fields,"main_features",p.get("main_features"),f"Mercado Livre catálogo {pid}")
+    # Página pública como fallback para título, descrição, preço e pelo menos imagens visíveis.
+    if page_data:
+        setf(fields, "title", page_data.get("title"), "Página pública Mercado Livre", "média")
+        setf(fields, "description", page_data.get("description"), "Página pública Mercado Livre", "média")
+        if page_data.get("price"):
+            val = str(page_data.get("price"))
+            if not val.upper().startswith("BRL"):
+                val = f"BRL {val}"
+            setf(fields, "price", val, "Página pública Mercado Livre", "média")
+        if page_data.get("pictures"):
+            pics = [{"id": None, "url": u} for u in page_data["pictures"]]
+            setf(fields, "pictures", pics, "Página pública Mercado Livre", "média")
 
-        st,offers=api_get(f"/products/{pid}/items",{"site_id":"MLB"},True)
-        if st==200 and isinstance(offers,dict):
-            results=deep_fix(offers.get("results") or [])
-            other_offers=results
-            own=next((x for x in results if x.get("item_id")==item_id),None)
+    # Descrição oficial do item quando disponível.
+    st, d = api_get(f"/items/{item_id}/description", auth=True)
+    if st == 200 and isinstance(d, dict):
+        desc = d.get("plain_text") or d.get("text")
+        setf(fields, "description", desc, "Mercado Livre /description")
+
+    # Catálogo: fonte preferencial para título, ficha, fotos e descrição completa.
+    for pid in pids[:6]:
+        st, p = api_get(f"/products/{pid}", auth=True)
+        if st == 200 and isinstance(p, dict):
+            # Catálogo deve prevalecer sobre fallbacks médios.
+            if p.get("name") or p.get("title"):
+                fields["title"] = {"value": deep_fix(p.get("name") or p.get("title")),
+                                   "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
+            if p.get("attributes"):
+                fields["attributes"] = {"value": deep_fix(p.get("attributes")),
+                                        "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
+            if p.get("pictures"):
+                fields["pictures"] = {"value": deep_fix(p.get("pictures")),
+                                      "source": f"Mercado Livre /products/{pid}", "confidence": "alta"}
+            short = (p.get("short_description") or {}).get("content")
+            if short:
+                fields["catalog_description"] = {"value": deep_fix(short),
+                                                 "source": f"Mercado Livre catálogo {pid}", "confidence": "alta"}
+            if p.get("main_features"):
+                fields["main_features"] = {"value": deep_fix(p.get("main_features")),
+                                           "source": f"Mercado Livre catálogo {pid}", "confidence": "alta"}
+
+        st, offers = api_get(f"/products/{pid}/items", {"site_id": "MLB"}, True)
+        if st == 200 and isinstance(offers, dict):
+            results = deep_fix(offers.get("results") or [])
+            if results:
+                other_offers = results
+            own = next((x for x in results if x.get("item_id") == item_id), None)
             if own:
                 if own.get("price") is not None:
-                    setf(fields,"price",f"{own.get('currency_id','')} {own.get('price')}".strip(),
-                         f"Mercado Livre /products/{pid}/items")
+                    fields["price"] = {
+                        "value": f"{own.get('currency_id','')} {own.get('price')}".strip(),
+                        "source": f"Mercado Livre /products/{pid}/items", "confidence": "alta"
+                    }
                 if own.get("original_price") is not None:
-                    setf(fields,"original_price",f"{own.get('currency_id','')} {own.get('original_price')}".strip(),
-                         f"Mercado Livre /products/{pid}/items")
-                setf(fields,"shipping",own.get("shipping"),f"Mercado Livre /products/{pid}/items")
-                setf(fields,"warranty",own.get("warranty"),f"Mercado Livre /products/{pid}/items")
-                setf(fields,"listing_type_id",own.get("listing_type_id"),f"Mercado Livre /products/{pid}/items")
-                setf(fields,"user_product_id",own.get("user_product_id"),f"Mercado Livre /products/{pid}/items")
+                    fields["original_price"] = {
+                        "value": f"{own.get('currency_id','')} {own.get('original_price')}".strip(),
+                        "source": f"Mercado Livre /products/{pid}/items", "confidence": "alta"
+                    }
+                setf(fields, "shipping", own.get("shipping"), f"Mercado Livre /products/{pid}/items")
+                setf(fields, "warranty", own.get("warranty"), f"Mercado Livre /products/{pid}/items")
+                setf(fields, "listing_type_id", own.get("listing_type_id"), f"Mercado Livre /products/{pid}/items")
+                setf(fields, "user_product_id", own.get("user_product_id"), f"Mercado Livre /products/{pid}/items")
+
+    # Se houver descrição do item mas não descrição de catálogo, exibe também como descrição principal.
+    if fields.get("description") and not fields.get("catalog_description"):
+        fields["catalog_description"] = fields["description"]
 
     return {
-        "raw":rec.get("raw"),"item_id":item_id,"product_ids":pids,
-        "seller_id":seller_id,"seller":sel,"question_summary":qsum,
-        "fields":fields,"other_offers":other_offers,"_collected_at_unix":int(time.time())
+        "raw": rec.get("raw"),
+        "item_id": item_id,
+        "product_ids": pids,
+        "seller_id": seller_id,
+        "seller": sel,
+        "question_summary": qsum,
+        "fields": fields,
+        "other_offers": other_offers,
+        "_collected_at_unix": int(time.time())
     }
 
 @app.route("/")
@@ -380,7 +560,7 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"ok":True,"version":"8.2","mode":"web"}
+    return {"ok":True,"version":"9.0-final","mode":"web"}
 
 @app.route("/notifications",methods=["GET","POST"])
 def notifications():
@@ -458,7 +638,7 @@ def export_json():
     data=ss().get("results") or []
     return Response(json.dumps(data,ensure_ascii=False,indent=2).encode("utf-8"),
                     mimetype="application/json",
-                    headers={"Content-Disposition":"attachment; filename=ml_v8_resultado.json"})
+                    headers={"Content-Disposition":"attachment; filename=ml_analyzer_final_resultado.json"})
 
 @app.route("/export/csv")
 def export_csv():
@@ -479,7 +659,7 @@ def export_csv():
             "free_shipping":ship.get("free_shipping")
         })
     return Response(out.getvalue().encode("utf-8-sig"),mimetype="text/csv",
-                    headers={"Content-Disposition":"attachment; filename=ml_v8_resumo.csv"})
+                    headers={"Content-Disposition":"attachment; filename=ml_analyzer_final_resumo.csv"})
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","8000")),debug=False)
