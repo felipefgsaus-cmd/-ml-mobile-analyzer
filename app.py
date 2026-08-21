@@ -30,7 +30,6 @@ app.config.update(
 )
 
 SERVER_SESSIONS = {}
-IOS_INBOX = {}
 
 HTML = """
 <!doctype html>
@@ -38,7 +37,7 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Mobile Analyzer V7 iPhone</title>
+<title>ML Analyzer V8</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
 .wrap{max-width:1120px;margin:auto;padding:16px}
@@ -62,8 +61,8 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Mobile Analyzer V7 iPhone</h1>
-<p class="muted">API oficial + catálogo + reviews + perguntas + complemento enviado pelo Safari/Atalhos.</p>
+<h1>ML Analyzer V8</h1>
+<p class="muted">API oficial + catálogo + reviews + perguntas + ofertas relacionadas.</p>
 
 <div class="card">
 <h2>1. Mercado Livre</h2>
@@ -85,17 +84,6 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 <p><button type="submit">Analisar</button></p>
 </form>
 <p class="muted">Até 8 anúncios por vez.</p>
-</div>
-
-<div class="card">
-<h2>3. Complementar pelo iPhone</h2>
-<p>Use o Atalho do iPhone para mandar o <b>link</b> e o <b>texto visível</b> da página para esta caixa de entrada.</p>
-<p><a class="btn blue" href="/iphone">Configurar iPhone / Atalho</a></p>
-{% if ios_import %}
-<p class="ok">✓ Último conteúdo recebido do iPhone.</p>
-<p><b>URL:</b> {{ ios_import.url or "—" }}</p>
-<div class="imported">{{ ios_import.text or "(nenhum texto enviado)" }}</div>
-{% endif %}
 </div>
 
 {% if error %}<div class="card bad"><b>Erro:</b> {{ error }}</div>{% endif %}
@@ -177,51 +165,6 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </div></body></html>
 """
 
-IPHONE_HTML = """
-<!doctype html>
-<html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Configurar iPhone</title>
-<style>
-body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f5;margin:0;color:#202020}
-.wrap{max-width:760px;margin:auto;padding:16px}.card{background:white;border:1px solid #ddd;border-radius:16px;padding:18px;margin:14px 0}
-.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f5f5f5;border-radius:10px;padding:10px;word-break:break-all}
-a{color:#1769aa}li{margin:10px 0}
-</style></head><body><div class="wrap">
-<div class="card">
-<h2>Atalho “Enviar ao Analyzer”</h2>
-<p>Seu endereço privado de recebimento é:</p>
-<div class="code">{{ ingest_url }}</div>
-<p><b>Não publique esse endereço.</b> Ele funciona como uma chave para a sua caixa de entrada.</p>
-</div>
-
-<div class="card">
-<h2>Como montar no app Atalhos</h2>
-<ol>
-<li>Abra <b>Atalhos</b> no iPhone e crie um novo atalho.</li>
-<li>Nas configurações do atalho, habilite <b>Mostrar na Folha de Compartilhamento</b> e aceite <b>URLs e páginas web do Safari</b>.</li>
-<li>Adicione a ação <b>Obter URLs da Entrada do Atalho</b>.</li>
-<li>Adicione uma ação para obter o texto da página. No Safari, prefira <b>Obter artigo usando o Leitor do Safari</b> quando disponível; se não estiver disponível, use o texto fornecido pela própria Folha de Compartilhamento.</li>
-<li>Adicione <b>Obter Conteúdo de URL</b> e use o endereço acima.</li>
-<li>Método: <b>POST</b>. Corpo da solicitação: <b>JSON</b>.</li>
-<li>Crie duas chaves no JSON: <b>url</b> = URL obtida no passo 3; <b>text</b> = texto/artigo obtido no passo 4.</li>
-<li>Salve com o nome <b>Enviar ao Analyzer</b>.</li>
-</ol>
-<p>Depois: Safari → anúncio → Compartilhar → <b>Enviar ao Analyzer</b>.</p>
-</div>
-
-<div class="card">
-<h2>Teste manual</h2>
-<form method="post" action="{{ ingest_path }}">
-<p><input style="width:100%;padding:10px" name="url" placeholder="URL"></p>
-<p><textarea style="width:100%;min-height:150px;padding:10px" name="text" placeholder="Texto da página"></textarea></p>
-<button style="padding:11px 15px">Enviar teste</button>
-</form>
-</div>
-
-<p><a href="/">← Voltar ao Analyzer</a></p>
-</div></body></html>
-"""
-
 def configured():
     return bool(APP_ID and CLIENT_SECRET and REDIRECT_URI)
 
@@ -236,7 +179,7 @@ def token():
     return ss().get("access_token")
 
 def api_headers(auth=True):
-    h = {"Accept":"application/json","User-Agent":"ML-Mobile-Analyzer/7.0"}
+    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.0"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
     return h
@@ -359,17 +302,15 @@ def collect(rec):
 @app.route("/")
 def home():
     store=ss()
-    inbox_key=store.get("ios_key")
-    ios_import=IOS_INBOX.get(inbox_key) if inbox_key else None
     return render_template_string(
         HTML, configured=configured(), token=bool(store.get("access_token")),
         rows=store.get("results"), links=store.get("last_links",""),
-        error=store.pop("error",None), ios_import=ios_import
+        error=store.pop("error",None)
     )
 
 @app.route("/health")
 def health():
-    return {"ok":True,"version":7,"mode":"iphone"}
+    return {"ok":True,"version":8,"mode":"web"}
 
 @app.route("/notifications",methods=["GET","POST"])
 def notifications():
@@ -423,27 +364,6 @@ def analyze():
     store["results"]=[collect(x) for x in recs]
     return redirect("/")
 
-@app.route("/iphone")
-def iphone():
-    store=ss()
-    if not store.get("ios_key"):
-        store["ios_key"]=secrets.token_urlsafe(24)
-    key=store["ios_key"]
-    ingest_path=f"/ios-share/{key}"
-    ingest_url=request.url_root.rstrip("/") + ingest_path
-    return render_template_string(IPHONE_HTML,ingest_url=ingest_url,ingest_path=ingest_path)
-
-@app.route("/ios-share/<key>",methods=["POST"])
-def ios_share(key):
-    # Accept JSON from Shortcuts or form data for manual testing.
-    if request.is_json:
-        data=request.get_json(silent=True) or {}
-    else:
-        data=request.form.to_dict()
-    url=fix_text(str(data.get("url") or data.get("URL") or ""))
-    text=fix_text(str(data.get("text") or data.get("article") or data.get("body") or ""))
-    IOS_INBOX[key]={"url":url,"text":text[:100000],"received_at":int(time.time())}
-    return jsonify({"ok":True,"received_url":bool(url),"received_text_chars":len(text)})
 
 @app.route("/export/json")
 def export_json():

@@ -1,33 +1,29 @@
-# ML Mobile Analyzer V7 iPhone
+# ML Analyzer V8
 
-Versão para uso diário.
+Versão limpa para celular e notebook, sem integração com iPhone/Atalhos.
 
-## Automático via API oficial
-- título do catálogo
-- preço e preço original via ofertas do catálogo
-- vendedor e reputação
+Mantém todos os dados que a V7 já mostrava:
+- título
+- preço atual
+- preço original
+- vendedor
+- reputação
 - logística
 - garantia
-- atributos
-- fotos
-- descrição curta do catálogo
+- ficha técnica
+- fotos do catálogo
+- descrição/resumo do catálogo
 - destaques do catálogo
-- avaliações, nota e total
+- avaliações
+- nota média
+- total de avaliações
 - perguntas e respostas
 - outras ofertas do mesmo produto
+- exportação JSON e CSV
 
-## Complemento pelo iPhone
-A rota `/iphone` cria uma URL privada de recebimento para um Atalho do iPhone.
+Removido:
+- botão “Configurar iPhone / Atalho”
+- rota `/iphone`
+- rota `/ios-share/...`
 
-O Atalho é disparado manualmente pela Folha de Compartilhamento do Safari e pode enviar:
-- URL do anúncio
-- texto/artigo que o próprio Safari disponibilizar
-
-O servidor não raspa automaticamente a página do Mercado Livre.
-
-## Render
-Mantenha:
-- ML_APP_ID
-- ML_CLIENT_SECRET
-- ML_REDIRECT_URI
-- FLASK_SECRET_KEY
+Funciona normalmente no celular e no notebook.
