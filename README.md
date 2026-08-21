@@ -1,16 +1,11 @@
-# ML Analyzer V8.1
+# ML Analyzer V8.2
 
-Versão web para celular e notebook.
-
-Correções desta versão:
-- aceita IDs no formato MLB1234567890 e MLB-1234567890;
-- aceita vários links, um por linha;
-- processa cada anúncio separadamente;
-- se um anúncio falhar, os outros continuam;
-- mantém catálogo, preço, vendedor, avaliações, perguntas, ficha técnica, fotos, logística, garantia e outras ofertas;
-- sem integração com iPhone/Atalhos.
-
-Para atualizar:
-1. substitua os arquivos do repositório pelos arquivos deste pacote;
-2. faça commit;
-3. no Render, faça Deploy latest commit.
+Correções:
+- aceita links com MLB-123... e MLB123...
+- analisa vários links, um por linha
+- um anúncio com erro não derruba o restante do lote
+- quando o link contém apenas o ID do anúncio, tenta descobrir automaticamente o catalog_product_id
+- usa secondary_key das avaliações como fonte principal do ID de catálogo
+- também tenta /items/{id} e Multi-GET /items como fallback
+- com o ID de catálogo recuperado, volta a buscar título, fotos, ficha técnica, descrição e outras ofertas
+- sem integração com iPhone/Atalhos

@@ -37,7 +37,7 @@ HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ML Analyzer V8</title>
+<title>ML Analyzer V8.2</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#202020;margin:0}
 .wrap{max-width:1120px;margin:auto;padding:16px}
@@ -60,7 +60,7 @@ th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:to
 </style>
 </head>
 <body><div class="wrap">
-<h1>ML Analyzer V8</h1>
+<h1>ML Analyzer V8.2</h1>
 <p class="muted">API oficial + catálogo + reviews + perguntas + ofertas relacionadas.</p>
 
 <div class="card">
@@ -178,7 +178,7 @@ def token():
     return ss().get("access_token")
 
 def api_headers(auth=True):
-    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.1"}
+    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.2"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
     return h
@@ -267,6 +267,39 @@ def seller(seller_id):
     if st!=200 or not isinstance(d,dict): return None
     return deep_fix(d)
 
+
+def discover_catalog_product_ids(item_id, review_data=None):
+    """Descobre IDs de catálogo mesmo quando o usuário cola só MLB-123..."""
+    found = []
+
+    def add(v):
+        if not isinstance(v, str):
+            return
+        v = v.upper().replace("-", "")
+        if re.fullmatch(r"MLB\d{6,}", v) and v != item_id and v not in found:
+            found.append(v)
+
+    # 1) Reviews frequentemente trazem o produto de catálogo em secondary_key.
+    if isinstance(review_data, dict):
+        for rv in review_data.get("reviews") or []:
+            add(rv.get("secondary_key"))
+
+    # 2) Tenta item individual (quando a permissão da conta permitir).
+    st, data = api_get(f"/items/{item_id}", auth=True)
+    if st == 200 and isinstance(data, dict):
+        add(data.get("catalog_product_id"))
+
+    # 3) Fallback Multi-GET; algumas contas respondem aqui mesmo quando a rota individual é limitada.
+    st, data = api_get("/items", {"ids": item_id}, True)
+    if st == 200 and isinstance(data, list):
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            body = row.get("body") if isinstance(row.get("body"), dict) else row
+            add(body.get("catalog_product_id"))
+
+    return found
+
 def collect(rec):
     item_id=rec["item_id"]; pids=list(rec.get("product_ids") or [])
     fields={}; other_offers=[]
@@ -284,11 +317,19 @@ def collect(rec):
     qsum,seller_id=questions(item_id)
     sel=seller(seller_id)
 
+    review_data=None
     st,d=api_get(f"/reviews/item/{item_id}",auth=True)
     if st==200 and isinstance(d,dict):
+        review_data=d
         setf(fields,"rating_average",d.get("rating_average"),"Mercado Livre /reviews")
         setf(fields,"reviews_total",(d.get("paging") or {}).get("total"),"Mercado Livre /reviews")
         setf(fields,"reviews",d.get("reviews"),"Mercado Livre /reviews")
+
+    # Se o link só trouxe o ID do anúncio, tenta descobrir o ID do catálogo automaticamente.
+    if not pids:
+        for pid in discover_catalog_product_ids(item_id, review_data):
+            if pid not in pids:
+                pids.append(pid)
 
     st,d=api_get(f"/items/{item_id}/description",auth=True)
     if st==200 and isinstance(d,dict):
@@ -339,7 +380,7 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"ok":True,"version":"8.1","mode":"web"}
+    return {"ok":True,"version":"8.2","mode":"web"}
 
 @app.route("/notifications",methods=["GET","POST"])
 def notifications():
