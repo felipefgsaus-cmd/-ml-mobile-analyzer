@@ -1,29 +1,16 @@
-# ML Analyzer V8
+# ML Analyzer V8.1
 
-Versão limpa para celular e notebook, sem integração com iPhone/Atalhos.
+Versão web para celular e notebook.
 
-Mantém todos os dados que a V7 já mostrava:
-- título
-- preço atual
-- preço original
-- vendedor
-- reputação
-- logística
-- garantia
-- ficha técnica
-- fotos do catálogo
-- descrição/resumo do catálogo
-- destaques do catálogo
-- avaliações
-- nota média
-- total de avaliações
-- perguntas e respostas
-- outras ofertas do mesmo produto
-- exportação JSON e CSV
+Correções desta versão:
+- aceita IDs no formato MLB1234567890 e MLB-1234567890;
+- aceita vários links, um por linha;
+- processa cada anúncio separadamente;
+- se um anúncio falhar, os outros continuam;
+- mantém catálogo, preço, vendedor, avaliações, perguntas, ficha técnica, fotos, logística, garantia e outras ofertas;
+- sem integração com iPhone/Atalhos.
 
-Removido:
-- botão “Configurar iPhone / Atalho”
-- rota `/iphone`
-- rota `/ios-share/...`
-
-Funciona normalmente no celular e no notebook.
+Para atualizar:
+1. substitua os arquivos do repositório pelos arquivos deste pacote;
+2. faça commit;
+3. no Render, faça Deploy latest commit.

@@ -56,7 +56,6 @@ table{border-collapse:collapse;width:100%;display:block;overflow:auto;font-size:
 th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;min-width:105px}
 .qa{border-top:1px solid #eee;padding:11px 0}
 .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;background:#f6f6f6;padding:10px;border-radius:10px;font-size:12px}
-.imported{white-space:pre-wrap;max-height:280px;overflow:auto;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:10px}
 @media(max-width:700px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -179,7 +178,7 @@ def token():
     return ss().get("access_token")
 
 def api_headers(auth=True):
-    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.0"}
+    h = {"Accept":"application/json","User-Agent":"ML-Analyzer/8.1"}
     if auth and token():
         h["Authorization"] = f"Bearer {token()}"
     return h
@@ -210,17 +209,37 @@ def deep_fix(obj):
     return obj
 
 def parse_inputs(text):
-    out=[]
+    out = []
     for raw in [x.strip() for x in text.splitlines() if x.strip()]:
-        q = re.findall(r'item_id(?:%3A|:|=)+(MLB\d{6,})', raw, flags=re.I)
-        mlb = re.findall(r'\bMLB\d{6,}\b', raw.upper())
+        # item_id em query string: item_id:MLB123 / item_id%3AMLB123
+        q = re.findall(r'item_id(?:%3A|:|=)+(MLB-?\d{6,})', raw, flags=re.I)
+
+        # IDs de item tanto MLB123 quanto MLB-123
+        mlb = re.findall(r'\bMLB-?\d{6,}\b', raw.upper())
+
+        # IDs de produto/usuário
         mlbu = re.findall(r'\bMLBU\d{6,}\b', raw.upper())
-        pathp = [x.upper() for x in re.findall(r'/(?:p|up)/(MLB(?:U)?\d{6,})', raw, flags=re.I)]
-        item_id = q[0].upper() if q else (mlb[-1] if mlb else None)
-        pids=[]
-        for x in mlbu+pathp:
-            if x != item_id and x not in pids: pids.append(x)
-        out.append({"raw":raw,"item_id":item_id,"product_ids":pids})
+
+        # IDs de catálogo em /p/MLB... ou /up/MLBU...
+        pathp = [x.upper() for x in re.findall(r'/(?:p|up)/(MLB(?:U)?-?\d{6,})', raw, flags=re.I)]
+
+        def normalize(x):
+            return x.upper().replace("-", "") if x else x
+
+        q = [normalize(x) for x in q]
+        mlb = [normalize(x) for x in mlb]
+        pathp = [normalize(x) for x in pathp]
+
+        # Em URLs de produto tradicionais, o ID do anúncio costuma ser o último MLB encontrado.
+        item_id = q[0] if q else (mlb[-1] if mlb else None)
+
+        pids = []
+        for x in mlbu + pathp:
+            x = normalize(x)
+            if x and x != item_id and x not in pids:
+                pids.append(x)
+
+        out.append({"raw": raw, "item_id": item_id, "product_ids": pids})
     return out
 
 def setf(fields,k,v,source,confidence="alta"):
@@ -228,6 +247,8 @@ def setf(fields,k,v,source,confidence="alta"):
     if k not in fields: fields[k]={"value":deep_fix(v),"source":source,"confidence":confidence}
 
 def questions(item_id):
+    if not item_id:
+        return {"status":0,"total":0,"questions":[]}, None
     st,d=api_get("/questions/search",{"item":item_id,"api_version":4,"limit":50},True)
     qs=[]; seller_id=None
     if st==200 and isinstance(d,dict):
@@ -249,23 +270,31 @@ def seller(seller_id):
 def collect(rec):
     item_id=rec["item_id"]; pids=list(rec.get("product_ids") or [])
     fields={}; other_offers=[]
+
+    if not item_id:
+        return {
+            "raw":rec.get("raw"),"item_id":None,"product_ids":pids,
+            "seller_id":None,"seller":None,
+            "question_summary":{"status":0,"total":0,"questions":[]},
+            "fields":fields,"other_offers":[],
+            "error":"ID do anúncio não reconhecido",
+            "_collected_at_unix":int(time.time())
+        }
+
     qsum,seller_id=questions(item_id)
     sel=seller(seller_id)
 
-    # Reviews now confirmed working.
     st,d=api_get(f"/reviews/item/{item_id}",auth=True)
     if st==200 and isinstance(d,dict):
         setf(fields,"rating_average",d.get("rating_average"),"Mercado Livre /reviews")
         setf(fields,"reviews_total",(d.get("paging") or {}).get("total"),"Mercado Livre /reviews")
         setf(fields,"reviews",d.get("reviews"),"Mercado Livre /reviews")
 
-    # Description route can be 200 but blank.
     st,d=api_get(f"/items/{item_id}/description",auth=True)
     if st==200 and isinstance(d,dict):
         desc=d.get("plain_text") or d.get("text")
         setf(fields,"description",desc,"Mercado Livre /description")
 
-    # Product gives title, attributes, images, short description, main features.
     for pid in pids[:4]:
         st,p=api_get(f"/products/{pid}",auth=True)
         if st==200 and isinstance(p,dict):
@@ -310,7 +339,7 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"ok":True,"version":8,"mode":"web"}
+    return {"ok":True,"version":"8.1","mode":"web"}
 
 @app.route("/notifications",methods=["GET","POST"])
 def notifications():
@@ -361,16 +390,34 @@ def analyze():
         store["error"]="Nenhum anúncio reconhecido."; return redirect("/")
     if len(recs)>8:
         store["error"]="Máximo de 8 anúncios."; return redirect("/")
-    store["results"]=[collect(x) for x in recs]
-    return redirect("/")
 
+    results=[]
+    for rec in recs:
+        try:
+            results.append(collect(rec))
+        except Exception as e:
+            results.append({
+                "raw":rec.get("raw"),
+                "item_id":rec.get("item_id"),
+                "product_ids":rec.get("product_ids") or [],
+                "seller_id":None,
+                "seller":None,
+                "question_summary":{"status":0,"total":0,"questions":[]},
+                "fields":{},
+                "other_offers":[],
+                "error":f"{type(e).__name__}: {e}",
+                "_collected_at_unix":int(time.time())
+            })
+
+    store["results"]=results
+    return redirect("/")
 
 @app.route("/export/json")
 def export_json():
     data=ss().get("results") or []
     return Response(json.dumps(data,ensure_ascii=False,indent=2).encode("utf-8"),
                     mimetype="application/json",
-                    headers={"Content-Disposition":"attachment; filename=ml_v7_resultado.json"})
+                    headers={"Content-Disposition":"attachment; filename=ml_v8_resultado.json"})
 
 @app.route("/export/csv")
 def export_csv():
@@ -391,7 +438,7 @@ def export_csv():
             "free_shipping":ship.get("free_shipping")
         })
     return Response(out.getvalue().encode("utf-8-sig"),mimetype="text/csv",
-                    headers={"Content-Disposition":"attachment; filename=ml_v7_resumo.csv"})
+                    headers={"Content-Disposition":"attachment; filename=ml_v8_resumo.csv"})
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","8000")),debug=False)
